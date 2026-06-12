@@ -101,6 +101,16 @@ class TransformPipeline:
         transforms.append(ContentRouter())
         logger.info("Pipeline using ContentRouter for intelligent content-aware compression")
 
+        # NumericFold - fold numeric columns of JSON tool outputs kept by
+        # ContentRouter/SmartCrusher. Opt-in while it ships (same pattern as
+        # the tool-result interceptor above): off by default; enable to compare.
+        if getattr(self.config, "numeric_fold_enabled", False) or _os.environ.get(
+            "HEADROOM_NUMERIC_FOLD"
+        ):
+            from headroom.transforms.numeric_fold import NumericFold, NumericFoldConfig
+            transforms.append(NumericFold(NumericFoldConfig()))
+            logger.info("Pipeline: NumericFold enabled (numeric-column folding)")
+
         return transforms
 
     def _get_tokenizer(self, model: str) -> Tokenizer:
