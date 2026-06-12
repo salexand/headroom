@@ -78,6 +78,8 @@ __all__ = [
     # JSON compression
     "SmartCrusher",
     "SmartCrusherConfig",
+    "NumericFold",
+    "NumericFoldConfig",
     # Text compression (coding tasks)
     "ContentType",
     "DetectionResult",
@@ -138,6 +140,8 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     # JSON compression
     "SmartCrusher": ("headroom.transforms.smart_crusher", "SmartCrusher"),
     "SmartCrusherConfig": ("headroom.transforms.smart_crusher", "SmartCrusherConfig"),
+    "NumericFold": ("headroom.transforms.numeric_fold", "NumericFold"),
+    "NumericFoldConfig": ("headroom.transforms.numeric_fold", "NumericFoldConfig"),
     # Text compression (coding tasks)
     "ContentType": ("headroom.transforms.content_detector", "ContentType"),
     "DetectionResult": ("headroom.transforms.content_detector", "DetectionResult"),
