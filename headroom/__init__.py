@@ -115,6 +115,8 @@ __all__ = [
     "WasteSignals",
     # Transforms
     "SmartCrusher",
+    "NumericFold",
+    "NumericFoldConfig",
     "CacheAligner",
     "TransformPipeline",
     # Cache optimizers
@@ -218,6 +220,8 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "WasteSignals": ("headroom.config", "WasteSignals"),
     # Transforms
     "SmartCrusher": ("headroom.transforms", "SmartCrusher"),
+    "NumericFold": ("headroom.transforms", "NumericFold"),
+    "NumericFoldConfig": ("headroom.transforms", "NumericFoldConfig"),
     "CacheAligner": ("headroom.transforms", "CacheAligner"),
     "TransformPipeline": ("headroom.transforms", "TransformPipeline"),
     # Cache optimizers
