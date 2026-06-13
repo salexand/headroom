@@ -97,6 +97,34 @@ def _decode_cell(s: str, t: str) -> Any:
     return s
 
 
+# ---------------------------------------------------------------------------
+# Dictionary encoding for low-cardinality string columns
+# ---------------------------------------------------------------------------
+
+
+def _should_dict_encode(col: list[Any], col_type: str) -> bool:
+    """Return True if dictionary encoding would save tokens."""
+    if col_type not in ("str", "json"):
+        return False
+    unique = len(set(str(v) for v in col))
+    # Dictionary pays: header line + one index per row
+    # Saves: (avg_value_len - index_len) * n_rows
+    # Heuristic: worth it if unique < 50% of total and unique < 64
+    return unique < len(col) * 0.5 and unique <= 64
+
+
+def _build_dict(col: list[Any]) -> tuple[dict[str, int], list[str]]:
+    """Build value -> index mapping and ordered dictionary."""
+    seen: dict[str, int] = {}
+    order: list[str] = []
+    for v in col:
+        s = str(v)
+        if s not in seen:
+            seen[s] = len(order)
+            order.append(s)
+    return seen, order
+
+
 def _csv_dumps(header: list[str], rows: list[list[str]]) -> str:
     buf = io.StringIO()
     w = csv.writer(buf, lineterminator="\n")
@@ -179,18 +207,46 @@ def columnar_fold(
     if not closed and not csv_keys:
         return None
 
+    # Dictionary-encode low-cardinality CSV columns
+    dict_encoded: dict[str, tuple[dict[str, int], list[str]]] = {}
+    for k in csv_keys:
+        col = cols[k]
+        if _should_dict_encode(col, csv_types[k]):
+            mapping, order = _build_dict(col)
+            dict_encoded[k] = (mapping, order)
+            per_column[k] = f"dict:{csv_types[k]}"
+
     # Build CSV block with explicit _i index column
     csv_text = ""
     if csv_keys:
-        rows = [
-            [str(i)] + [_encode_cell(cols[k][i], csv_types[k]) for k in csv_keys]
-            for i in range(len(records))
-        ]
-        csv_text = _csv_dumps(["_i"] + csv_keys, rows)
+        csv_rows = []
+        for i in range(len(records)):
+            row = [str(i)]
+            for k in csv_keys:
+                if k in dict_encoded:
+                    mapping, _ = dict_encoded[k]
+                    row.append(str(mapping[str(cols[k][i])]))
+                else:
+                    row.append(_encode_cell(cols[k][i], csv_types[k]))
+            csv_rows.append(row)
+        csv_text = _csv_dumps(["_i"] + csv_keys, csv_rows)
+
+    # Build dictionary lines (prepended before CSV)
+    dict_lines: list[str] = []
+    for k in csv_keys:
+        if k in dict_encoded:
+            _, order = dict_encoded[k]
+            dict_lines.append(f"@dict:{k}={','.join(order)}")
 
     cols_str = ";".join(f"{k}={closed[k].payload_str}" for k in closed)
     header = f"n={len(records)}|cols:{cols_str}"
-    folded_text = header + ("\n" + csv_text if csv_text else "")
+
+    parts = [header]
+    if dict_lines:
+        parts.extend(dict_lines)
+    if csv_text:
+        parts.append(csv_text)
+    folded_text = "\n".join(parts)
 
     recipe = {
         "codec": "COLUMNARFOLD",
@@ -206,6 +262,7 @@ def columnar_fold(
             for k in closed
         },
         "csv_types": csv_types,
+        "dict_encoded": {k: order for k, (_, order) in dict_encoded.items()},
     }
 
     return ColumnarResult(
@@ -226,6 +283,7 @@ def reconstruct_columnar(folded_text: str, recipe: dict[str, Any]) -> list[dict[
     """Exact inverse of columnar_fold."""
     n = recipe["n"]
     schema = recipe["schema"]
+    dict_encoded = recipe.get("dict_encoded", {})
 
     # Closed-form columns
     closed_vals: dict[str, list[Any]] = {}
@@ -236,15 +294,30 @@ def reconstruct_columnar(folded_text: str, recipe: dict[str, Any]) -> list[dict[
         )
         closed_vals[k] = reconstruct_column(f)
 
-    # CSV columns
+    # Find CSV portion (skip header and @dict: lines)
     csv_vals: dict[str, list[Any]] = {}
-    if "\n" in folded_text:
-        _, csv_text = folded_text.split("\n", 1)
+    lines = folded_text.split("\n")
+    csv_start = 1  # skip header line
+    while csv_start < len(lines) and lines[csv_start].startswith("@dict:"):
+        csv_start += 1
+
+    if csv_start < len(lines):
+        csv_text = "\n".join(lines[csv_start:])
         csv_header, csv_rows = _csv_loads(csv_text)
         types = recipe["csv_types"]
         for ci, k in enumerate(csv_header):
             if k in types:
-                csv_vals[k] = [_decode_cell(r[ci], types[k]) for r in csv_rows]
+                if k in dict_encoded:
+                    # Decode dictionary indices back to values
+                    dictionary = dict_encoded[k]
+                    raw_vals = []
+                    for r in csv_rows:
+                        idx = int(r[ci])
+                        val_str = dictionary[idx]
+                        raw_vals.append(_decode_cell(val_str, types[k]))
+                    csv_vals[k] = raw_vals
+                else:
+                    csv_vals[k] = [_decode_cell(r[ci], types[k]) for r in csv_rows]
 
     out = []
     for i in range(n):

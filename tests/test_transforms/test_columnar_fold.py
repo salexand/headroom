@@ -99,10 +99,52 @@ class TestColumnarFold:
         raw = json.dumps(obj, separators=(",", ":"))
         result = columnar_fold(raw)
         assert result is not None
-        # t and count should be closed-form, label should be csv
+        # t and count should be closed-form, label should be csv or dict
         assert result.per_column["t"] in ("AFFINE", "CONST")
         assert result.per_column["count"] in ("AFFINE", "CONST")
-        assert result.per_column["label"].startswith("csv:")
+        assert result.per_column["label"].startswith(("csv:", "dict:"))
+
+    def test_dict_encoding_low_cardinality(self) -> None:
+        """Low-cardinality string columns should be dictionary-encoded."""
+        obj = {
+            "results": [
+                {
+                    "id": i,
+                    "level": ["INFO", "WARN", "ERROR"][i % 3],
+                    "msg": ["ok", "fail"][i % 2],
+                }
+                for i in range(60)
+            ]
+        }
+        raw = json.dumps(obj, separators=(",", ":"))
+        result = columnar_fold(raw)
+        assert result is not None
+        # level (3 unique/60) and msg (2 unique/60) should be dict-encoded
+        assert result.per_column["level"].startswith("dict:")
+        assert result.per_column["msg"].startswith("dict:")
+        # Verify lossless round-trip
+        rebuilt = reconstruct_columnar(result.folded_text, result.recipe)
+        assert rebuilt == obj["results"]
+        # Dict encoding should produce @dict: lines in output
+        assert "@dict:" in result.folded_text
+
+    def test_dict_encoding_saves_tokens(self) -> None:
+        """Dictionary encoding should save more than plain CSV on repeated strings."""
+        obj = {
+            "results": [
+                {
+                    "id": i,
+                    "status": ["active", "inactive", "pending"][i % 3],
+                    "region": ["us-east-1", "us-west-2", "eu-west-1", "ap-southeast-1"][i % 4],
+                }
+                for i in range(100)
+            ]
+        }
+        raw = json.dumps(obj, separators=(",", ":"))
+        result = columnar_fold(raw)
+        assert result is not None
+        # Should save significantly more than just key dedup
+        assert result.chars_after < result.chars_before * 0.5
 
     def test_transform_applies_to_tool_message(self) -> None:
         """ColumnarFoldTransform should compress tool message content."""
