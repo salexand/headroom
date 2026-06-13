@@ -32,6 +32,7 @@ def run_benchmark(
     dimension: int,
     num_tables: int,
     hash_bits: int,
+    num_probes: int = 0,
     n_queries: int = 100,
     k: int = 10,
 ) -> dict:
@@ -66,7 +67,7 @@ def run_benchmark(
     for qid in query_ids:
         q = vectors[qid]
         t0 = time.perf_counter()
-        results = lsh.query(q, k=k)
+        results = lsh.query(q, k=k, num_probes=num_probes)
         lsh_times.append(time.perf_counter() - t0)
         lsh_results[qid] = {r.memory_id for r in results}
 
@@ -98,6 +99,7 @@ def run_benchmark(
         "dimension": dimension,
         "num_tables": num_tables,
         "hash_bits": hash_bits,
+        "num_probes": num_probes,
         "index_time_ms": index_time * 1000,
         "index_per_vec_us": index_time / n_vectors * 1e6,
         "lsh_query_ms_median": np.median(lsh_times) * 1000,
@@ -113,31 +115,38 @@ def run_benchmark(
 
 def main() -> None:
     configs = [
-        {"n_vectors": 1000, "dimension": 128, "num_tables": 12, "hash_bits": 8},
-        {"n_vectors": 1000, "dimension": 384, "num_tables": 16, "hash_bits": 8},
-        {"n_vectors": 5000, "dimension": 128, "num_tables": 12, "hash_bits": 8},
-        {"n_vectors": 5000, "dimension": 384, "num_tables": 16, "hash_bits": 8},
-        {"n_vectors": 10000, "dimension": 384, "num_tables": 20, "hash_bits": 10},
+        # Without multi-probe (baseline)
+        {"n_vectors": 5000, "dimension": 384, "num_tables": 16, "hash_bits": 8, "num_probes": 0},
+        # With multi-probe (1-bit flips)
+        {"n_vectors": 5000, "dimension": 384, "num_tables": 16, "hash_bits": 8, "num_probes": 8},
+        # With multi-probe (1+2 bit flips)
+        {"n_vectors": 5000, "dimension": 384, "num_tables": 16, "hash_bits": 8, "num_probes": 36},
+        # Larger scale with multi-probe
+        {"n_vectors": 10000, "dimension": 384, "num_tables": 16, "hash_bits": 8, "num_probes": 0},
+        {"n_vectors": 10000, "dimension": 384, "num_tables": 16, "hash_bits": 8, "num_probes": 8},
+        {"n_vectors": 10000, "dimension": 384, "num_tables": 16, "hash_bits": 8, "num_probes": 36},
     ]
 
-    print(f"{'N':>7} {'dim':>5} {'tables':>7} {'bits':>5} "
-          f"{'idx ms':>8} {'LSH ms':>8} {'BF ms':>8} {'speedup':>8} "
+    print(f"{'N':>7} {'dim':>5} {'tables':>7} {'bits':>5} {'probes':>7} "
+          f"{'LSH ms':>8} {'BF ms':>8} {'speedup':>8} "
           f"{'recall':>8} {'self':>6}")
-    print("-" * 90)
+    print("-" * 95)
 
     for cfg in configs:
         r = run_benchmark(**cfg)
         print(
-            f"{r['n_vectors']:>7} {r['dimension']:>5} {r['num_tables']:>7} {r['hash_bits']:>5} "
-            f"{r['index_time_ms']:>7.1f} {r['lsh_query_ms_median']:>7.3f} "
+            f"{r['n_vectors']:>7} {r['dimension']:>5} {r['num_tables']:>7} "
+            f"{r['hash_bits']:>5} {r['num_probes']:>7} "
+            f"{r['lsh_query_ms_median']:>7.3f} "
             f"{r['bf_query_ms_median']:>7.3f} {r['speedup_median']:>7.1f}x "
             f"{r['recall_at_k_mean']:>7.1%} {r['self_recall']:>5.0%}"
         )
 
     print()
+    print("probes = 0: exact bucket only (original)")
+    print("probes = 8: check 1-bit neighbor buckets")
+    print("probes = 36: check 1-bit + 2-bit neighbor buckets")
     print("recall = fraction of brute-force top-10 found by LSH")
-    print("self   = fraction of queries where LSH finds the query vector itself")
-    print("speedup = brute-force median / LSH median query time")
 
 
 if __name__ == "__main__":
