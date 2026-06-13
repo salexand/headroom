@@ -176,15 +176,191 @@ def rans_decode(encoded: bytes) -> bytes:
 
 
 # ---------------------------------------------------------------------------
+# Order-1 rANS (context-dependent frequencies)
+# ---------------------------------------------------------------------------
+
+
+def _build_order1_tables(
+    data: bytes,
+) -> tuple[list[list[int]], list[list[int]]]:
+    """Build per-context frequency and CDF tables for order-1 model.
+
+    Returns (freqs_2d, cdfs_2d) where freqs_2d[ctx][sym] is the
+    frequency of symbol `sym` following context byte `ctx`.
+    """
+    # Count transitions
+    counts: list[list[int]] = [[0] * 256 for _ in range(256)]
+    if len(data) > 0:
+        # First symbol uses context 0
+        counts[0][data[0]] += 1
+        for i in range(1, len(data)):
+            counts[data[i - 1]][data[i]] += 1
+
+    freqs_2d: list[list[int]] = []
+    cdfs_2d: list[list[int]] = []
+
+    for ctx in range(256):
+        total = sum(counts[ctx])
+        if total == 0:
+            # No data for this context — uniform distribution
+            freqs = [1] * 256
+            total = 256
+        else:
+            freqs = [0] * 256
+            present = [s for s in range(256) if counts[ctx][s] > 0]
+            remaining = _PROB_SCALE
+            for s in present:
+                f = max(1, round(counts[ctx][s] * _PROB_SCALE / total))
+                freqs[s] = f
+                remaining -= f
+            if remaining != 0 and present:
+                most = max(present, key=lambda s: counts[ctx][s])
+                freqs[most] += remaining
+
+        # Build CDF
+        cdf = [0] * 257
+        for i in range(256):
+            cdf[i + 1] = cdf[i] + freqs[i]
+
+        freqs_2d.append(freqs)
+        cdfs_2d.append(cdf)
+
+    return freqs_2d, cdfs_2d
+
+
+def rans_encode_order1(data: bytes) -> bytes:
+    """Encode data using order-1 rANS. Returns encoded bytes.
+
+    Format: [1 byte magic 0x01][4-byte length][256*256*2-byte freq table][stream]
+    """
+    if not data:
+        return b"\x01" + struct.pack("<I", 0)
+
+    freqs_2d, cdfs_2d = _build_order1_tables(data)
+
+    # Encode in reverse
+    state = _RANS_L
+    out_bytes: list[int] = []
+
+    for i in range(len(data) - 1, -1, -1):
+        symbol = data[i]
+        ctx = data[i - 1] if i > 0 else 0
+        freq = freqs_2d[ctx][symbol]
+        if freq == 0:
+            raise ValueError(f"Zero freq for ctx={ctx} sym={symbol}")
+
+        max_state = freq * (_RANS_L // _PROB_SCALE) * _RANS_B
+        while state >= max_state:
+            out_bytes.append(state & 0xFF)
+            state >>= 8
+
+        state = (state // freq) * _PROB_SCALE + (state % freq) + cdfs_2d[ctx][symbol]
+
+    # Flush state
+    for _ in range(4):
+        out_bytes.append(state & 0xFF)
+        state >>= 8
+
+    # Pack: magic + length + freq tables + stream
+    header = b"\x01" + struct.pack("<I", len(data))
+    # Flatten freq table: 256 contexts * 256 symbols * 2 bytes = 128KB
+    # Too large! Use a compact representation instead.
+    # Store only non-zero context rows, delta-coded.
+    # For simplicity in this prototype: store the full table.
+    freq_bytes = b""
+    for ctx in range(256):
+        freq_bytes += b"".join(struct.pack("<H", f) for f in freqs_2d[ctx])
+
+    stream = bytes(reversed(out_bytes))
+    return header + freq_bytes + stream
+
+
+def rans_decode_order1(encoded: bytes) -> bytes:
+    """Decode order-1 rANS-encoded data."""
+    if len(encoded) < 5 or encoded[0] != 0x01:
+        raise ValueError("Not an order-1 rANS encoded stream")
+
+    orig_len = struct.unpack("<I", encoded[1:5])[0]
+    if orig_len == 0:
+        return b""
+
+    freq_table_size = 256 * 256 * 2  # 128KB
+    if len(encoded) < 5 + freq_table_size:
+        raise ValueError("Missing frequency table")
+
+    # Read freq tables
+    freqs_2d: list[list[int]] = []
+    cdfs_2d: list[list[int]] = []
+    sym_tables: list[list[int]] = []
+
+    for ctx in range(256):
+        offset = 5 + ctx * 512
+        freqs = [
+            struct.unpack("<H", encoded[offset + i * 2 : offset + i * 2 + 2])[0]
+            for i in range(256)
+        ]
+        cdf = [0] * 257
+        for i in range(256):
+            cdf[i + 1] = cdf[i] + freqs[i]
+
+        sym_table = [0] * _PROB_SCALE
+        for s in range(256):
+            for j in range(freqs[s]):
+                sym_table[cdf[s] + j] = s
+
+        freqs_2d.append(freqs)
+        cdfs_2d.append(cdf)
+        sym_tables.append(sym_table)
+
+    # Read stream
+    stream = encoded[5 + freq_table_size :]
+    stream_pos = 0
+
+    state = 0
+    for i in range(4):
+        if stream_pos < len(stream):
+            state = (state << 8) | stream[stream_pos]
+            stream_pos += 1
+
+    # Decode
+    output = bytearray(orig_len)
+    ctx = 0  # first symbol uses context 0
+    for i in range(orig_len):
+        slot = state % _PROB_SCALE
+        symbol = sym_tables[ctx][slot]
+        output[i] = symbol
+
+        freq = freqs_2d[ctx][symbol]
+        state = freq * (state // _PROB_SCALE) + slot - cdfs_2d[ctx][symbol]
+
+        while state < _RANS_L and stream_pos < len(stream):
+            state = (state << 8) | stream[stream_pos]
+            stream_pos += 1
+
+        ctx = symbol  # next context is current symbol
+
+    return bytes(output)
+
+
+# ---------------------------------------------------------------------------
 # Convenience wrappers for text
 # ---------------------------------------------------------------------------
 
 
 def compress_text(text: str) -> bytes:
-    """Compress a text string using rANS. Returns encoded bytes."""
+    """Compress a text string using rANS. Returns encoded bytes.
+
+    Uses order-0 by default. Order-1 is available via rans_encode_order1
+    for data >128KB where the 128KB frequency table overhead is justified.
+    """
     return rans_encode(text.encode("utf-8"))
 
 
 def decompress_text(encoded: bytes) -> str:
-    """Decompress rANS-encoded bytes back to a text string."""
+    """Decompress rANS-encoded bytes back to a text string.
+
+    Auto-detects order-0 vs order-1 from the stream header.
+    """
+    if encoded and encoded[0] == 0x01:
+        return rans_decode_order1(encoded).decode("utf-8")
     return rans_decode(encoded).decode("utf-8")
