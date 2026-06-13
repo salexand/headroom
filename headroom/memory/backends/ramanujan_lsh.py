@@ -147,16 +147,51 @@ class RamanujanLSH:
 
         return True
 
+    def _probe_keys(self, key: int, num_probes: int) -> list[int]:
+        """Generate multi-probe keys by flipping 1 or 2 bits.
+
+        Multi-probe LSH checks neighboring hash buckets to find near
+        neighbors that landed in adjacent buckets due to hash boundary
+        effects. Flipping the bits closest to the hyperplane decision
+        boundary is optimal, but uniform bit-flipping is a good
+        approximation.
+        """
+        keys = [key]
+        if num_probes <= 0:
+            return keys
+
+        # 1-bit flips
+        for bit in range(self._hash_bits):
+            flipped = key ^ (1 << bit)
+            keys.append(flipped)
+            if len(keys) >= num_probes + 1:
+                return keys
+
+        # 2-bit flips
+        for b1 in range(self._hash_bits):
+            for b2 in range(b1 + 1, self._hash_bits):
+                flipped = key ^ (1 << b1) ^ (1 << b2)
+                keys.append(flipped)
+                if len(keys) >= num_probes + 1:
+                    return keys
+
+        return keys
+
     def query(
         self,
         vector: np.ndarray,
         k: int = 10,
+        num_probes: int = 0,
     ) -> list[LSHResult]:
         """Find approximate nearest neighbors.
 
         Args:
             vector: Query vector.
             k: Number of results to return.
+            num_probes: Number of additional hash buckets to probe per
+                table (multi-probe LSH). 0 = exact bucket only (original
+                behavior). Higher values improve recall at the cost of
+                checking more buckets. Recommended: hash_bits (e.g. 8).
 
         Returns:
             List of LSHResult sorted by cosine distance (ascending).
@@ -170,13 +205,15 @@ class RamanujanLSH:
         if norm > 0:
             vector = vector / norm
 
-        # Collect candidates from all tables
+        # Collect candidates from all tables, probing nearby buckets
         candidates: dict[str, np.ndarray] = {}
         for t in range(self._num_tables):
-            key = self._hash(vector, t)
-            for mid, v in self._tables[t].get(key, []):
-                if mid not in candidates:
-                    candidates[mid] = v
+            primary_key = self._hash(vector, t)
+            probe_keys = self._probe_keys(primary_key, num_probes)
+            for key in probe_keys:
+                for mid, v in self._tables[t].get(key, []):
+                    if mid not in candidates:
+                        candidates[mid] = v
 
         # Rank by cosine distance
         results = []
@@ -198,7 +235,9 @@ class RamanujanLSH:
         """Embedding dimension."""
         return self._dim
 
-    def find_duplicates(self, threshold: float = 0.05) -> list[tuple[str, str, float]]:
+    def find_duplicates(
+        self, threshold: float = 0.05, num_probes: int = 0,
+    ) -> list[tuple[str, str, float]]:
         """Find near-duplicate pairs in the index.
 
         Args:
@@ -211,7 +250,7 @@ class RamanujanLSH:
         duplicates: list[tuple[str, str, float]] = []
 
         for mid, vector in self._vectors.items():
-            results = self.query(vector, k=10)
+            results = self.query(vector, k=10, num_probes=num_probes)
             for r in results:
                 if r.memory_id == mid:
                     continue

@@ -61,6 +61,7 @@ class RamanujanVectorIndex:
         dimension: int = 384,
         num_tables: int = 16,
         hash_bits: int = 8,
+        num_probes: int = 0,
         seed: int = 42,
     ) -> None:
         self._lsh = RamanujanLSH(
@@ -69,6 +70,7 @@ class RamanujanVectorIndex:
             hash_bits=hash_bits,
             seed=seed,
         )
+        self._num_probes = num_probes
         self._metadata: dict[str, _IndexedMeta] = {}
         self._lock = threading.Lock()
 
@@ -142,7 +144,9 @@ class RamanujanVectorIndex:
                 return []
 
             # Get more candidates than needed to account for filtering
-            raw_results = self._lsh.query(query, k=filter.top_k * 10)
+            raw_results = self._lsh.query(
+                query, k=filter.top_k * 10, num_probes=self._num_probes,
+            )
 
         results: list[VectorSearchResult] = []
         for r in raw_results:
