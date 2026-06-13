@@ -104,6 +104,39 @@ class TestColumnarFold:
         assert result.per_column["count"] in ("AFFINE", "CONST")
         assert result.per_column["label"].startswith("csv:")
 
+    def test_transform_applies_to_tool_message(self) -> None:
+        """ColumnarFoldTransform should compress tool message content."""
+        import tiktoken
+        from headroom.transforms.columnar_fold import ColumnarFoldTransform
+        from headroom.transforms.numeric_fold import NumericFoldConfig
+        from headroom.providers.anthropic import AnthropicProvider
+
+        obj = {
+            "results": [
+                {"id": i, "ts": 1718200000 + 5 * i, "level": "INFO", "msg": "ok"}
+                for i in range(50)
+            ]
+        }
+        raw = json.dumps(obj, separators=(",", ":"))
+
+        provider = AnthropicProvider(warn=False)
+        from headroom.tokenizer import Tokenizer
+        tokenizer = Tokenizer(provider.get_token_counter("claude-sonnet-4-20250514"))
+
+        messages = [
+            {"role": "user", "content": "process"},
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "c1", "name": "t", "input": {}}
+            ]},
+            {"role": "tool", "tool_use_id": "c1", "content": raw},
+        ]
+
+        transform = ColumnarFoldTransform(NumericFoldConfig())
+        result = transform.apply(messages, tokenizer)
+
+        assert result.tokens_after < result.tokens_before
+        assert any("columnar_fold" in t for t in result.transforms_applied)
+
     def test_beats_numeric_fold_on_mixed_data(self) -> None:
         """ColumnarFold should save more than NumericFold alone on
         data with both numeric and non-numeric columns."""
