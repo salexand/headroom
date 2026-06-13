@@ -32,13 +32,15 @@ def cli() -> None:
 )
 @click.option("--csv", "csv_path", default=None, help="Write CSV to this path.")
 @click.option("--md", "md_path", default=None, help="Write markdown to this path.")
-@click.option("--pipeline", is_flag=True, help="Include full Headroom pipeline adapter (slow).")
+@click.option("--competitors", is_flag=True, help="Include competitor adapters (RTK, lean-ctx).")
+@click.option("--pipeline", is_flag=True, help="Include full Headroom pipeline adapters (slow).")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output.")
 def run(
     suites: tuple[str, ...],
     tokenizers: tuple[str, ...],
     csv_path: str | None,
     md_path: str | None,
+    competitors: bool,
     pipeline: bool,
     verbose: bool,
 ) -> None:
@@ -67,7 +69,9 @@ def run(
     click.echo(f"Loaded {len(datasets)} dataset(s): {[d.name for d in datasets]}")
 
     # Get adapters
-    adapter_list = adapters.get_adapters(include_pipeline=pipeline)
+    adapter_list = adapters.get_adapters(
+        include_pipeline=pipeline, include_competitors=competitors,
+    )
     click.echo(f"Adapters: {[a.name for a in adapter_list]}")
 
     # Run

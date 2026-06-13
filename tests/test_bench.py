@@ -17,9 +17,14 @@ from headroom.bench.loader import (
 )
 from headroom.bench.adapters import (
     GzipAdapter,
+    HeadroomUpstreamAdapter,
+    LeanCtxAdapter,
     NumericFoldAdapter,
+    RTKAdapter,
     RawAdapter,
     UnavailableAdapter,
+    _leanctx_available,
+    _rtk_available,
     get_adapters,
 )
 from headroom.bench.scorer import score
@@ -129,6 +134,54 @@ class TestAdapters:
         assert out.text == context
         assert out.error is None
 
+    def test_rtk_adapter_compresses_json(self) -> None:
+        if not _rtk_available():
+            pytest.skip("rtk binary not installed")
+        adapter = RTKAdapter()
+        ds = load_builtin("sre_logs")
+        out = adapter.compress(ds.raw_json)
+        assert out.adapter_name == "rtk"
+        assert out.error is None
+        # RTK truncates JSON arrays -> smaller output
+        assert out.chars_after < out.chars_before
+        assert out.reversible is False
+
+    def test_rtk_adapter_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "headroom.bench.adapters._rtk_available", lambda: False
+        )
+        adapter = RTKAdapter()
+        out = adapter.compress('{"a":1}')
+        assert out.error is not None
+        assert "not found" in out.error
+
+    def test_leanctx_adapter_runs(self) -> None:
+        if not _leanctx_available():
+            pytest.skip("leanctx not installed")
+        adapter = LeanCtxAdapter()
+        ds = load_builtin("sre_logs")
+        out = adapter.compress(ds.raw_json)
+        assert out.adapter_name == "lean-ctx"
+        assert out.error is None
+        # leanctx Verbatim mode may not compress, but should not error
+        assert out.text is not None
+
+    def test_leanctx_adapter_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "headroom.bench.adapters._leanctx_available", lambda: False
+        )
+        adapter = LeanCtxAdapter()
+        out = adapter.compress('{"a":1}')
+        assert out.error is not None
+        assert "not installed" in out.error
+
+    def test_upstream_adapter_protocol(self) -> None:
+        adapter = HeadroomUpstreamAdapter()
+        assert adapter.name == "headroom-upstream"
+        # Just verify it returns a CompressedOutput (may error without deps)
+        out = adapter.compress('{"results":[{"id":1}]}')
+        assert isinstance(out, CompressedOutput)
+
     def test_get_adapters_default(self) -> None:
         adapters = get_adapters()
         names = [a.name for a in adapters]
@@ -143,11 +196,20 @@ class TestAdapters:
         names = [a.name for a in adapters]
         assert "headroom" in names
 
+    def test_get_adapters_with_competitors(self) -> None:
+        adapters = get_adapters(include_competitors=True)
+        names = [a.name for a in adapters]
+        # Competitors always show up (real or stub depending on install)
+        assert "rtk" in names
+        assert "lean-ctx" in names
+
     def test_get_adapters_with_unavailable(self) -> None:
         adapters = get_adapters(include_unavailable=True)
         names = [a.name for a in adapters]
         assert "rtk" in names
         assert "lean-ctx" in names
+        assert "headroom-upstream" in names
+        assert "headroom" in names
 
 
 # ---- scorer ----------------------------------------------------------------
