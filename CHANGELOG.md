@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.25.0] (2026-06-13)
+
+### Features
+
+* **transforms:** ColumnarFold -- CSV transposition + dictionary encoding on top of NumericFold. 52% aggregate lossless token savings across 12 benchmark datasets, enabled by default in the pipeline.
+* **transforms:** NumericFold -- closed-form codecs (AFFINE, CONST, POLY, DELTA, RATIONAL) for numeric columns. Lossless, 38-79% savings on numeric-heavy data.
+* **transforms:** MDL Scorer -- principled compressor selection via Minimum Description Length. Wired into ContentRouter as opt-in (`enable_mdl_selection`).
+* **bench:** `headroom-bench` single-command benchmark suite with 12 datasets, 7 adapters, dual tokenizer, answer fidelity scoring, coverage heatmap, fairness header.
+* **cache:** rANS entropy coder for CCR storage compression. Wired into CompressionStore as opt-in (`enable_storage_compression`).
+* **memory:** Ramanujan-expander LSH VectorIndex adapter. 7-28x faster than brute-force, 100% self-recall.
+* **pipeline:** ColumnarFold is now the default transform. Disable with `HEADROOM_NO_FOLD=1`.
+
+### Tests
+
+* 137+ tests across all new modules.
+
+### Documentation
+
+* BENCHMARKS.md with full benchmark report.
+* README rewritten with complete fork summary.
+
+### CI
+
+* GitHub Actions workflow for deterministic benchmark axes on every PR.
+
+
 ## [0.24.0](https://github.com/chopratejas/headroom/compare/v0.23.0...v0.24.0) (2026-06-08)
 
 
