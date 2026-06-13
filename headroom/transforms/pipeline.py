@@ -103,19 +103,20 @@ class TransformPipeline:
 
         # ColumnarFold / NumericFold — fold numeric + residual columns of
         # JSON tool outputs kept by ContentRouter/SmartCrusher.
-        # ColumnarFold is a superset of NumericFold (codecs + CSV key dedup).
-        # Opt-in while they ship; enable one to compare.
-        if _os.environ.get("HEADROOM_COLUMNAR_FOLD"):
+        # ColumnarFold is the default (superset of NumericFold: codecs + CSV
+        # key dedup + dictionary encoding). Disable with HEADROOM_NO_FOLD=1.
+        # Fall back to NumericFold-only with HEADROOM_NUMERIC_FOLD=1.
+        if _os.environ.get("HEADROOM_NO_FOLD"):
+            logger.info("Pipeline: structure-aware folding disabled (HEADROOM_NO_FOLD)")
+        elif _os.environ.get("HEADROOM_NUMERIC_FOLD"):
+            from headroom.transforms.numeric_fold import NumericFold, NumericFoldConfig
+            transforms.append(NumericFold(NumericFoldConfig()))
+            logger.info("Pipeline: NumericFold enabled (numeric-column folding only)")
+        else:
             from headroom.transforms.columnar_fold import ColumnarFoldTransform
             from headroom.transforms.numeric_fold import NumericFoldConfig
             transforms.append(ColumnarFoldTransform(NumericFoldConfig()))
-            logger.info("Pipeline: ColumnarFold enabled (codecs + CSV transposition)")
-        elif getattr(self.config, "numeric_fold_enabled", False) or _os.environ.get(
-            "HEADROOM_NUMERIC_FOLD"
-        ):
-            from headroom.transforms.numeric_fold import NumericFold, NumericFoldConfig
-            transforms.append(NumericFold(NumericFoldConfig()))
-            logger.info("Pipeline: NumericFold enabled (numeric-column folding)")
+            logger.info("Pipeline: ColumnarFold enabled (codecs + CSV + dictionary)")
 
         return transforms
 
