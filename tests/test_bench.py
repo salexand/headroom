@@ -56,6 +56,70 @@ class TestLoader:
         assert ds.category == "adversarial"
         assert len(ds.records) == 60
 
+    # -- agent workloads --
+
+    def test_load_builtin_code_search(self) -> None:
+        ds = load_builtin("code_search")
+        assert ds.category == "agent"
+        assert len(ds.records) == 80
+        assert "file" in ds.records[0]
+
+    def test_load_builtin_github_issues(self) -> None:
+        ds = load_builtin("github_issues")
+        assert ds.category == "agent"
+        assert len(ds.records) == 100
+
+    def test_load_builtin_codebase_exploration(self) -> None:
+        ds = load_builtin("codebase_exploration")
+        assert ds.category == "agent"
+        assert len(ds.records) == 120
+
+    # -- numeric-heavy --
+
+    def test_load_builtin_api_response(self) -> None:
+        ds = load_builtin("api_response")
+        assert ds.category == "numeric-heavy"
+        assert len(ds.records) == 200
+        # Should have dense numeric columns
+        assert "p50_ms" in ds.records[0]
+
+    def test_load_builtin_embeddings(self) -> None:
+        ds = load_builtin("embeddings")
+        assert ds.category == "numeric-heavy"
+        assert len(ds.records) == 100
+        assert "embedding" in ds.records[0]
+
+    def test_load_builtin_timeseries(self) -> None:
+        ds = load_builtin("timeseries")
+        assert ds.category == "numeric-heavy"
+        assert len(ds.records) == 250
+
+    # -- adversarial (expanded) --
+
+    def test_load_builtin_near_progression(self) -> None:
+        ds = load_builtin("near_progression")
+        assert ds.category == "adversarial"
+        assert len(ds.records) == 80
+
+    def test_load_builtin_mixed_types(self) -> None:
+        ds = load_builtin("mixed_types")
+        assert ds.category == "adversarial"
+        assert len(ds.records) == 60
+        # Some rows have "N/A" for value, others have int
+        has_str = any(isinstance(r["value"], str) for r in ds.records)
+        has_int = any(isinstance(r["value"], int) for r in ds.records)
+        assert has_str and has_int
+
+    def test_load_suite_agent(self) -> None:
+        datasets = load_suite("agent")
+        names = {d.name for d in datasets}
+        assert names == {"code_search", "github_issues", "codebase_exploration"}
+
+    def test_load_suite_numeric_heavy(self) -> None:
+        datasets = load_suite("numeric-heavy")
+        names = {d.name for d in datasets}
+        assert names == {"api_response", "embeddings", "timeseries"}
+
     def test_load_builtin_unknown_raises(self) -> None:
         with pytest.raises(ValueError, match="Unknown dataset"):
             load_builtin("nonexistent")
