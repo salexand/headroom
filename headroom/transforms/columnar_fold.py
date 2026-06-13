@@ -32,6 +32,10 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..config import CCRConfig, TransformResult
+from ..tokenizer import Tokenizer
+from ..utils import compute_short_hash, create_tool_digest_marker, deep_copy_messages
+from .base import Transform
 from .numeric_fold import (
     ColumnFold,
     NumericFoldConfig,
@@ -252,3 +256,110 @@ def reconstruct_columnar(folded_text: str, recipe: dict[str, Any]) -> list[dict[
                 rec[k] = csv_vals[k][i]
         out.append(rec)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Transform wrapper for pipeline integration
+# ---------------------------------------------------------------------------
+
+
+class ColumnarFoldTransform(Transform):
+    """Post-SmartCrusher columnar folding transform.
+
+    Superset of NumericFold: closed-form codecs for numeric columns PLUS
+    CSV transposition for residual columns. Use this instead of NumericFold
+    in the pipeline for maximum compression.
+    """
+
+    name = "columnar_fold"
+
+    def __init__(
+        self,
+        config: NumericFoldConfig | None = None,
+        ccr_config: CCRConfig | None = None,
+    ) -> None:
+        self.config = config or NumericFoldConfig()
+        self._ccr_config = ccr_config or CCRConfig()
+
+    def should_apply(
+        self,
+        messages: list[dict[str, Any]],
+        tokenizer: Tokenizer,
+        **kwargs: Any,
+    ) -> bool:
+        return self.config.enabled
+
+    def _fold_content(
+        self, content: str, tokenizer: Tokenizer,
+    ) -> tuple[str, str] | None:
+        if tokenizer.count_text(content) < self.config.min_tokens_to_fold:
+            return None
+        result = columnar_fold(content, self.config)
+        if result is None:
+            return None
+        if tokenizer.count_text(result.folded_text) >= tokenizer.count_text(content):
+            return None
+        codecs = ",".join(sorted(set(result.per_column.values())))
+        return result.folded_text, codecs
+
+    def apply(
+        self,
+        messages: list[dict[str, Any]],
+        tokenizer: Tokenizer,
+        **kwargs: Any,
+    ) -> TransformResult:
+        tokens_before = tokenizer.count_messages(messages)
+        result_messages = deep_copy_messages(messages)
+        transforms_applied: list[str] = []
+        markers_inserted: list[str] = []
+        frozen = kwargs.get("frozen_message_count", 0)
+        folded_count = 0
+
+        for idx, msg in enumerate(result_messages):
+            if idx < frozen:
+                continue
+            # OpenAI-style tool messages
+            if msg.get("role") == "tool" and isinstance(msg.get("content"), str):
+                res = self._fold_content(msg["content"], tokenizer)
+                if res:
+                    folded_text, codecs = res
+                    marker = create_tool_digest_marker(
+                        compute_short_hash(msg["content"])
+                    )
+                    msg["content"] = folded_text + "\n" + marker
+                    markers_inserted.append(marker)
+                    transforms_applied.append(f"columnar_fold:{codecs}")
+                    folded_count += 1
+            # Anthropic-style tool_result blocks
+            content = msg.get("content")
+            if isinstance(content, list):
+                for i, block in enumerate(content):
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") != "tool_result":
+                        continue
+                    tc = block.get("content")
+                    if not isinstance(tc, str):
+                        continue
+                    res = self._fold_content(tc, tokenizer)
+                    if res:
+                        folded_text, codecs = res
+                        marker = create_tool_digest_marker(
+                            compute_short_hash(tc)
+                        )
+                        content[i]["content"] = folded_text + "\n" + marker
+                        markers_inserted.append(marker)
+                        transforms_applied.append(f"columnar_fold:{codecs}")
+                        folded_count += 1
+
+        if folded_count:
+            transforms_applied.insert(0, f"columnar_fold:{folded_count}")
+
+        return TransformResult(
+            messages=result_messages,
+            tokens_before=tokens_before,
+            tokens_after=tokenizer.count_messages(result_messages),
+            transforms_applied=transforms_applied,
+            markers_inserted=markers_inserted,
+            warnings=[],
+        )

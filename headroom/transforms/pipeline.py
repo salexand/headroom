@@ -101,10 +101,16 @@ class TransformPipeline:
         transforms.append(ContentRouter())
         logger.info("Pipeline using ContentRouter for intelligent content-aware compression")
 
-        # NumericFold - fold numeric columns of JSON tool outputs kept by
-        # ContentRouter/SmartCrusher. Opt-in while it ships (same pattern as
-        # the tool-result interceptor above): off by default; enable to compare.
-        if getattr(self.config, "numeric_fold_enabled", False) or _os.environ.get(
+        # ColumnarFold / NumericFold — fold numeric + residual columns of
+        # JSON tool outputs kept by ContentRouter/SmartCrusher.
+        # ColumnarFold is a superset of NumericFold (codecs + CSV key dedup).
+        # Opt-in while they ship; enable one to compare.
+        if _os.environ.get("HEADROOM_COLUMNAR_FOLD"):
+            from headroom.transforms.columnar_fold import ColumnarFoldTransform
+            from headroom.transforms.numeric_fold import NumericFoldConfig
+            transforms.append(ColumnarFoldTransform(NumericFoldConfig()))
+            logger.info("Pipeline: ColumnarFold enabled (codecs + CSV transposition)")
+        elif getattr(self.config, "numeric_fold_enabled", False) or _os.environ.get(
             "HEADROOM_NUMERIC_FOLD"
         ):
             from headroom.transforms.numeric_fold import NumericFold, NumericFoldConfig
