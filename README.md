@@ -394,7 +394,17 @@ Full results: [BENCHMARKS.md](BENCHMARKS.md)
 
 **rANS Codec** (`headroom/cache/rans_codec.py`) — order-0 range Asymmetric Numeral System encoder for compressing CCR originals on disk. This is **byte compression, not token reduction** (the LLM never sees the encoded form). Reduces storage cost for the CCR originals store. Pure Python prototype; production path is the Rust crate.
 
-**Ramanujan LSH** (`headroom/memory/backends/ramanujan_lsh.py`) — locality-sensitive hashing using Ramanujan-graph-inspired projections (QR-orthogonalized for optimal spectral gap) for approximate nearest neighbor search. Alternative to HNSW for cross-agent memory dedup. O(1) index time, O(L) query time, includes `find_duplicates()` for dedup. Sits alongside existing HNSW/sqlite-vec backends.
+**Ramanujan LSH** (`headroom/memory/backends/ramanujan_lsh.py` + `headroom/memory/adapters/ramanujan_vector.py`) — locality-sensitive hashing using Ramanujan-graph-inspired projections (QR-orthogonalized for optimal spectral gap) for approximate nearest neighbor search. Full `VectorIndex` adapter that plugs into the memory system alongside HNSW/sqlite-vec. O(1) index time, O(L) query time, includes `find_duplicates()` for cross-agent dedup.
+
+**Ramanujan LSH vs brute-force cosine search:**
+
+| Vectors | Dim | Tables | LSH query | BF query | Speedup | Recall@10 | Self-recall |
+|--------:|----:|-------:|----------:|---------:|--------:|----------:|------------:|
+| 1,000 | 128 | 12 | 0.08ms | 0.64ms | **7.8x** | 21% | 100% |
+| 5,000 | 384 | 16 | 0.39ms | 3.81ms | **9.9x** | 21% | 100% |
+| 10,000 | 384 | 20 | 0.31ms | 8.64ms | **27.6x** | 15% | 100% |
+
+100% self-recall (always finds the query vector). ~20% recall@10 on uniform random vectors is the expected LSH baseline — real embeddings with natural clustering recall significantly higher. Reproduce: `python benchmarks/bench_ramanujan_vs_bruteforce.py`
 
 ---
 
@@ -418,7 +428,8 @@ Three fields power the fork's compression:
 | MDL Scorer | 10 | Selection, inflation rejection, model cost, errors |
 | rANS Codec | 15 | Round-trips, compression ratios, all byte values |
 | Ramanujan LSH | 10 | ANN search, dedup, recall at scale |
-| **Total** | **126** | |
+| Ramanujan VectorIndex | 11 | VectorIndex protocol, filtering, batch ops |
+| **Total** | **137** | |
 
 ---
 
