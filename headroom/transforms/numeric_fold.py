@@ -63,6 +63,8 @@ class NumericFoldConfig:
     enable_rational: bool = True
     enable_poly: bool = False         # GATED — only legible on strong tiers (#5)
     max_poly_order: int = 3
+    enable_recurrence: bool = True    # linear recurrence codec (Fibonacci-like sequences)
+    max_recurrence_order: int = 4     # max order of linear recurrence to detect
     hoist_raw: bool = False           # keep RAW columns inline (#4); True dedups keys
 
 
@@ -147,6 +149,89 @@ def _est(text: str) -> int:
     return n
 
 
+def _detect_linear_recurrence(
+    values: list[Fraction], max_order: int,
+) -> tuple[list[Fraction], list[Fraction]] | None:
+    """Detect if a sequence satisfies a linear recurrence of order <= max_order.
+
+    Returns (coeffs, initial_values) if found, None otherwise.
+    coeffs[i] means T_r = coeffs[0]*T_{r-1} + coeffs[1]*T_{r-2} + ...
+
+    Uses the Berlekamp-Massey approach: try each order d from 1 to max_order,
+    set up the system T_r = c0*T_{r-1} + ... + c_{d-1}*T_{r-d} and check if
+    it holds exactly for all values.
+    """
+    n = len(values)
+
+    for d in range(1, min(max_order + 1, n // 2)):
+        # Need at least 2d values: d for initial conditions, d for the system
+        if n < 2 * d:
+            continue
+
+        # Solve for coefficients using the first 2d values
+        # Build matrix: for rows d..2d-1, each row is [T_{r-1}, T_{r-2}, ..., T_{r-d}]
+        # and target is T_r
+        from fractions import Fraction as F
+
+        # Set up linear system via Gaussian elimination
+        rows_needed = d
+        matrix = []
+        targets = []
+        for r in range(d, d + rows_needed):
+            row = [values[r - 1 - j] for j in range(d)]
+            matrix.append(row)
+            targets.append(values[r])
+
+        # Gaussian elimination with exact fractions
+        aug = [row + [t] for row, t in zip(matrix, targets)]
+        for col in range(d):
+            # Find pivot
+            pivot = None
+            for row in range(col, d):
+                if aug[row][col] != 0:
+                    pivot = row
+                    break
+            if pivot is None:
+                break
+            aug[col], aug[pivot] = aug[pivot], aug[col]
+            for row in range(d):
+                if row != col and aug[row][col] != 0:
+                    factor = aug[row][col] / aug[col][col]
+                    for j in range(d + 1):
+                        aug[row][j] -= factor * aug[col][j]
+        else:
+            # Extract coefficients
+            coeffs = [aug[i][d] / aug[i][i] for i in range(d)]
+
+            # Verify against ALL remaining values
+            ok = True
+            for r in range(d, n):
+                predicted = sum(coeffs[j] * values[r - 1 - j] for j in range(d))
+                if predicted != values[r]:
+                    ok = False
+                    break
+
+            if ok:
+                return coeffs, list(values[:d])
+
+    return None
+
+
+def _reconstruct_recurrence(
+    coeffs: list[str], init: list[str], n: int,
+) -> list[int | float]:
+    """Reconstruct a sequence from linear recurrence coefficients."""
+    c = [Fraction(x) for x in coeffs]
+    vals = [Fraction(x) for x in init]
+    d = len(c)
+
+    for _ in range(n - d):
+        nxt = sum(c[j] * vals[-(j + 1)] for j in range(d))
+        vals.append(nxt)
+
+    return [int(v) if v.denominator == 1 else float(v) for v in vals[:n]]
+
+
 def fold_column(values: list[Any], cfg: NumericFoldConfig) -> ColumnFold:
     """Pick the minimum-cost reversible encoding for one numeric column."""
     fr = [_to_fraction(v) for v in values]
@@ -187,6 +272,23 @@ def fold_column(values: list[Any], cfg: NumericFoldConfig) -> ColumnFold:
         deltas = [ints[0]] + [ints[i] - ints[i - 1] for i in range(1, n)]
         body = ",".join(str(d) for d in deltas)
         cands.append(ColumnFold("DELTA", {"deltas": deltas}, f"DELTA(base={ints[0]};{body})", n))
+
+    # Linear recurrence codec (catches Fibonacci-like, exponential, trace sequences)
+    if cfg.enable_recurrence and n >= 4 and _is_intlike(fr):
+        rec = _detect_linear_recurrence(fr, cfg.max_recurrence_order)
+        if rec is not None:
+            coeffs_fr, init_fr = rec
+            d = len(coeffs_fr)
+            coeffs_s = [str(c) for c in coeffs_fr]
+            init_s = [str(v) for v in init_fr]
+            body_c = ",".join(_num_str(c) for c in coeffs_fr)
+            body_i = ",".join(_num_str(v) for v in init_fr)
+            payload = f"RECURRENCE(coeffs=[{body_c}],init=[{body_i}],n={n})"
+            cands.append(ColumnFold(
+                f"RECURRENCE{d}",
+                {"coeffs": coeffs_s, "init": init_s, "n": n},
+                payload, n,
+            ))
 
     if cfg.enable_rational and not _is_intlike(fr):
         tolF = Fraction(cfg.rel_tol).limit_denominator(10**12)
@@ -232,6 +334,8 @@ def reconstruct_column(fold: ColumnFold) -> list:
         return out
     if c == "RATIONAL":
         return [float(Fraction(x)) for x in r["rationals"]]
+    if c.startswith("RECURRENCE"):
+        return _reconstruct_recurrence(r["coeffs"], r["init"], r["n"])
     raise ValueError(f"unknown codec {c}")
 
 
