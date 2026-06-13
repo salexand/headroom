@@ -82,18 +82,18 @@ def _fmt_tokens(n: int) -> str:
 def _fmt_saved(pct: float, error: str | None) -> str:
     if error:
         return "err"
-    return f"{pct:.0f}%" if pct != 0 else "—"
+    return f"{pct:.0f}%" if pct != 0 else "--"
 
 
 def _fmt_reversible(v: bool | None) -> str:
     if v is None:
-        return "—"
+        return "--"
     return "Yes" if v else "No"
 
 
 def _fmt_latency(ms: float, adapter: str) -> str:
     if adapter == "raw":
-        return "—"
+        return "--"
     return f"{ms:.1f}"
 
 

@@ -84,14 +84,13 @@ class HeadroomAdapter:
     def compress(self, context: str) -> CompressedOutput:
         t0 = time.perf_counter()
         try:
-            from ..config import HeadroomConfig, TransformResult
+            from ..config import HeadroomConfig
             from ..providers.anthropic import AnthropicProvider
-            from ..tokenizer import Tokenizer
             from ..transforms.pipeline import TransformPipeline
 
+            model = "claude-sonnet-4-20250514"
             config = HeadroomConfig()
-            provider = AnthropicProvider(model="claude-sonnet-4-20250514")
-            tokenizer = Tokenizer(provider.get_token_counter(), model=provider.model)
+            provider = AnthropicProvider(warn=False)
 
             # Build a minimal message list with the context as a tool result
             messages: list[dict[str, Any]] = [
@@ -115,7 +114,9 @@ class HeadroomAdapter:
             ]
 
             pipeline = TransformPipeline(config=config, provider=provider)
-            result: TransformResult = pipeline.apply(messages, tokenizer)
+            result: TransformResult = pipeline.apply(
+                messages, model, model_limit=200_000,
+            )
 
             # Extract the compressed tool content
             compressed_text = context
@@ -151,6 +152,63 @@ class HeadroomAdapter:
 
 
 # ---------------------------------------------------------------------------
+# numeric-fold — direct NumericFold adapter (the fork's differentiator)
+# ---------------------------------------------------------------------------
+
+
+class NumericFoldAdapter:
+    """Direct NumericFold compression, bypassing the full pipeline.
+
+    This isolates the fork's key contribution so it can be measured
+    independently of ContentRouter / SmartCrusher.
+    """
+
+    name: str = "numeric-fold"
+
+    def compress(self, context: str) -> CompressedOutput:
+        t0 = time.perf_counter()
+        try:
+            from ..transforms.numeric_fold import NumericFoldConfig, fold_tool_output
+
+            cfg = NumericFoldConfig()
+            result = fold_tool_output(context, cfg)
+
+            if result is None:
+                # Nothing foldable — return unchanged
+                elapsed = (time.perf_counter() - t0) * 1000
+                return CompressedOutput(
+                    adapter_name=self.name,
+                    text=context,
+                    chars_before=len(context),
+                    chars_after=len(context),
+                    latency_ms=elapsed,
+                    reversible=True,
+                )
+
+            folded_text, _recipe = result
+            elapsed = (time.perf_counter() - t0) * 1000
+            return CompressedOutput(
+                adapter_name=self.name,
+                text=folded_text,
+                chars_before=len(context),
+                chars_after=len(folded_text),
+                latency_ms=elapsed,
+                reversible=True,
+            )
+        except Exception as e:
+            elapsed = (time.perf_counter() - t0) * 1000
+            logger.debug("NumericFoldAdapter failed: %s", e)
+            return CompressedOutput(
+                adapter_name=self.name,
+                text=context,
+                chars_before=len(context),
+                chars_after=len(context),
+                latency_ms=elapsed,
+                error=f"{type(e).__name__}: {e}",
+            )
+
+
+# ---------------------------------------------------------------------------
 # Unavailable adapter stub — for competitors not yet wired
 # ---------------------------------------------------------------------------
 
@@ -175,20 +233,28 @@ class UnavailableAdapter:
 # Registry
 # ---------------------------------------------------------------------------
 
-_DEFAULT_ADAPTERS: list[Adapter] = [
+_FAST_ADAPTERS: list[Adapter] = [
     RawAdapter(),
     GzipAdapter(),
-    HeadroomAdapter(),
+    NumericFoldAdapter(),
 ]
 
 
-def get_adapters(include_unavailable: bool = False) -> list[Adapter]:
+def get_adapters(
+    include_pipeline: bool = False,
+    include_unavailable: bool = False,
+) -> list[Adapter]:
     """Return the list of available adapters.
 
-    When *include_unavailable* is True, also returns placeholder stubs for
-    competitors not yet integrated (useful for table layout).
+    By default returns only fast, self-contained adapters (raw, gzip,
+    numeric-fold).  Set *include_pipeline* to add the full Headroom
+    pipeline adapter (slower — loads ContentRouter, SmartCrusher, etc.).
+    Set *include_unavailable* for placeholder stubs of competitors not
+    yet integrated (useful for table layout).
     """
-    adapters: list[Adapter] = list(_DEFAULT_ADAPTERS)
+    adapters: list[Adapter] = list(_FAST_ADAPTERS)
+    if include_pipeline:
+        adapters.append(HeadroomAdapter())
     if include_unavailable:
         for name in ("rtk", "lean-ctx", "headroom-upstream"):
             adapters.append(UnavailableAdapter(name))

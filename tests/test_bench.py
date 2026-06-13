@@ -17,6 +17,7 @@ from headroom.bench.loader import (
 )
 from headroom.bench.adapters import (
     GzipAdapter,
+    NumericFoldAdapter,
     RawAdapter,
     UnavailableAdapter,
     get_adapters,
@@ -110,11 +111,36 @@ class TestAdapters:
         assert out.error == "adapter not available"
         assert out.text == "test"
 
+    def test_numeric_fold_adapter_compresses(self) -> None:
+        ds = load_builtin("sre_logs")
+        adapter = NumericFoldAdapter()
+        out = adapter.compress(ds.raw_json)
+        assert out.adapter_name == "numeric-fold"
+        assert out.error is None
+        # SRE logs have numeric columns -> should compress
+        assert out.chars_after < out.chars_before
+        assert out.reversible is True
+
+    def test_numeric_fold_adapter_no_numeric_data(self) -> None:
+        adapter = NumericFoldAdapter()
+        context = '{"items":[{"name":"a"},{"name":"b"}]}'
+        out = adapter.compress(context)
+        # No numeric columns -> unchanged
+        assert out.text == context
+        assert out.error is None
+
     def test_get_adapters_default(self) -> None:
         adapters = get_adapters()
         names = [a.name for a in adapters]
         assert "raw" in names
         assert "gzip" in names
+        assert "numeric-fold" in names
+        # headroom pipeline adapter is opt-in (slow)
+        assert "headroom" not in names
+
+    def test_get_adapters_with_pipeline(self) -> None:
+        adapters = get_adapters(include_pipeline=True)
+        names = [a.name for a in adapters]
         assert "headroom" in names
 
     def test_get_adapters_with_unavailable(self) -> None:
@@ -243,6 +269,47 @@ class TestReporter:
         md = write_markdown(results)
         assert "err" in md
         assert "adapter not available" in md
+
+
+# ---- CLI -------------------------------------------------------------------
+
+
+class TestCLI:
+    def test_run_numeric_suite(self) -> None:
+        from click.testing import CliRunner
+        from headroom.bench.__main__ import cli
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["run", "--suite", "numeric"])
+        assert result.exit_code == 0
+        assert "sre_logs" in result.output
+        assert "geo_search" in result.output
+        assert "metrics_timeseries" in result.output
+
+    def test_run_with_csv_output(self, tmp_path: pytest.TempPathFactory) -> None:
+        from click.testing import CliRunner
+        from headroom.bench.__main__ import cli
+
+        csv_path = str(tmp_path / "results.csv")
+        runner = CliRunner()
+        result = runner.invoke(cli, ["run", "--suite", "adversarial", "--csv", csv_path])
+        assert result.exit_code == 0
+        content = (tmp_path / "results.csv").read_text()
+        assert "adversarial_floats" in content
+
+    def test_run_dual_tokenizer(self) -> None:
+        from click.testing import CliRunner
+        from headroom.bench.__main__ import cli
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["run", "--suite", "adversarial", "--tokenizer", "cl100k_base",
+             "--tokenizer", "o200k_base"],
+        )
+        assert result.exit_code == 0
+        assert "cl100k_base" in result.output
+        assert "o200k_base" in result.output
 
 
 # ---- _types ----------------------------------------------------------------
