@@ -452,6 +452,12 @@ class ContentRouterConfig:
     # Fallback: Kompress handles unknown/mixed content instead of passing through
     fallback_strategy: CompressionStrategy = CompressionStrategy.KOMPRESS
 
+    # MDL-based compressor selection: when True, the router tries multiple
+    # candidate compressors and picks the one with shortest total description
+    # length (L(model) + L(data|model)). When False (default), uses the
+    # hard-coded content-type-to-strategy mapping.
+    enable_mdl_selection: bool = False
+
     # Protection: Don't compress content that's likely the subject of analysis
     skip_user_messages: bool = True  # User messages contain what they want analyzed
     protect_recent_code: int = 4  # Don't compress CODE in last N messages (0 = disabled)
@@ -928,24 +934,35 @@ class ContentRouter(Transform):
                 routing_log=[],
             )
         else:
-            # Determine strategy from content analysis
-            mixed = is_mixed_content(content)
-            detection = _detect_content(content)
-            strategy = self._determine_strategy(content)
-            if debug_enabled:
-                _log_router_debug(
-                    "content_router_input",
-                    **request_debug,
-                    detected_content_type=detection.content_type.value,
-                    detection_confidence=detection.confidence,
-                    selected_strategy=strategy.value,
-                    selection_reason="mixed_content" if mixed else "content_detection",
-                )
-
-            if strategy == CompressionStrategy.MIXED:
-                result = self._compress_mixed(content, context, question, bias=bias)
+            # MDL-based selection: try multiple compressors, pick shortest
+            if self.config.enable_mdl_selection:
+                result = self._compress_mdl(content, context, question, bias=bias)
+                if debug_enabled:
+                    _log_router_debug(
+                        "content_router_input",
+                        **request_debug,
+                        selected_strategy=result.strategy_used.value,
+                        selection_reason="mdl_selection",
+                    )
             else:
-                result = self._compress_pure(content, strategy, context, question, bias=bias)
+                # Rule-based selection (default)
+                mixed = is_mixed_content(content)
+                detection = _detect_content(content)
+                strategy = self._determine_strategy(content)
+                if debug_enabled:
+                    _log_router_debug(
+                        "content_router_input",
+                        **request_debug,
+                        detected_content_type=detection.content_type.value,
+                        detection_confidence=detection.confidence,
+                        selected_strategy=strategy.value,
+                        selection_reason="mixed_content" if mixed else "content_detection",
+                    )
+
+                if strategy == CompressionStrategy.MIXED:
+                    result = self._compress_mixed(content, context, question, bias=bias)
+                else:
+                    result = self._compress_pure(content, strategy, context, question, bias=bias)
 
         # Empty-output guard: compression must NEVER blank out non-empty input.
         # An empty user-message content makes Anthropic reject the whole request
@@ -1062,6 +1079,75 @@ class ContentRouter(Transform):
             strategy = CompressionStrategy.KOMPRESS
 
         return strategy
+
+    def _compress_mdl(
+        self,
+        content: str,
+        context: str,
+        question: str | None = None,
+        bias: float = 1.0,
+    ) -> RouterCompressionResult:
+        """Select the best compressor via MDL scoring.
+
+        Tries each enabled compressor and picks the one whose output has
+        the shortest total description length (model cost + data cost).
+        Always includes passthrough as a baseline so we never inflate.
+        """
+        from .mdl_scorer import mdl_select
+
+        # Build candidate list from enabled strategies
+        candidates: list[tuple[str, Any]] = []
+        strategies_tried: list[CompressionStrategy] = []
+
+        enabled_strategies = [
+            (CompressionStrategy.SMART_CRUSHER, self.config.enable_smart_crusher),
+            (CompressionStrategy.SEARCH, self.config.enable_search_compressor),
+            (CompressionStrategy.LOG, self.config.enable_log_compressor),
+            (CompressionStrategy.HTML, self.config.enable_html_extractor),
+        ]
+
+        for strategy, enabled in enabled_strategies:
+            if not enabled:
+                continue
+
+            def make_fn(s: CompressionStrategy):
+                def fn(c: str) -> str:
+                    compressed, _, _ = self._apply_strategy_to_content(
+                        c, s, context, question=question, bias=bias,
+                    )
+                    return compressed
+                return fn
+
+            candidates.append((strategy.value, make_fn(strategy)))
+            strategies_tried.append(strategy)
+
+        # Simple token counter (word-split estimate for speed)
+        def token_count(text: str) -> int:
+            return len(text.split())
+
+        mdl_result = mdl_select(content, candidates, token_count)
+        best = mdl_result.best
+
+        # Map back to strategy
+        if best.name == "raw":
+            used_strategy = CompressionStrategy.PASSTHROUGH
+        else:
+            used_strategy = CompressionStrategy(best.name)
+
+        return RouterCompressionResult(
+            compressed=best.compressed,
+            original=content,
+            strategy_used=used_strategy,
+            strategy_chain=[f"mdl:{best.name}"],
+            routing_log=[
+                RoutingDecision(
+                    content_type=self._content_type_from_strategy(used_strategy),
+                    strategy=used_strategy,
+                    original_tokens=mdl_result.original_tokens,
+                    compressed_tokens=best.data_cost,
+                )
+            ],
+        )
 
     def _compress_mixed(
         self,
