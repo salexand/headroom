@@ -157,6 +157,7 @@ class CompressionStore:
         default_ttl: int = 300,
         enable_feedback: bool = True,
         backend: CompressionStoreBackend | None = None,
+        enable_storage_compression: bool = False,
     ):
         """Initialize the compression store.
 
@@ -166,11 +167,15 @@ class CompressionStore:
             enable_feedback: Whether to track retrieval events.
             backend: Storage backend to use. Defaults to InMemoryBackend.
                      Custom backends can be passed for persistence (MongoDB, Redis).
+            enable_storage_compression: When True, original content is rANS-
+                     compressed before storing and decompressed on retrieve.
+                     Reduces storage size (bytes, not tokens). Default False.
         """
         # Import here to avoid circular imports
         from .backends import InMemoryBackend
 
         self._backend: CompressionStoreBackend = backend or InMemoryBackend()
+        self._storage_compression = enable_storage_compression
         self._lock = threading.Lock()
         self._max_entries = max_entries
         self._default_ttl = default_ttl
@@ -266,9 +271,19 @@ class CompressionStore:
             # deterministically under whichever function is in use.
             hash_key = hashlib.sha256(original.encode()).hexdigest()[:24]
 
+        # Optional rANS storage compression (bytes, not tokens)
+        stored_original = original
+        if self._storage_compression:
+            try:
+                from .rans_codec import compress_text
+
+                stored_original = "\x00RANS:" + compress_text(original).hex()
+            except Exception:
+                pass  # Fall back to raw storage
+
         entry = CompressionEntry(
             hash=hash_key,
-            original_content=original,
+            original_content=stored_original,
             compressed_content=compressed,
             original_tokens=original_tokens,
             compressed_tokens=compressed_tokens,
@@ -346,6 +361,16 @@ class CompressionStore:
                 # CRITICAL FIX: Track stale heap entry
                 self._stale_heap_entries += 1
                 return None
+
+            # Decompress rANS-encoded original if needed
+            if entry.original_content.startswith("\x00RANS:"):
+                try:
+                    from .rans_codec import decompress_text
+
+                    hex_data = entry.original_content[6:]  # strip "\x00RANS:"
+                    entry.original_content = decompress_text(bytes.fromhex(hex_data))
+                except Exception:
+                    pass  # Return as-is if decompression fails
 
             # Track access for feedback
             entry.record_access(query)
