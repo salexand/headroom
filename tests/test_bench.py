@@ -1,0 +1,264 @@
+"""Tests for headroom.bench harness skeleton."""
+
+from __future__ import annotations
+
+import csv
+import io
+import json
+
+import pytest
+
+from headroom.bench._types import BenchResult, CompressedOutput, Dataset, SuiteConfig
+from headroom.bench.loader import (
+    SUITES,
+    load_builtin,
+    load_file,
+    load_suite,
+)
+from headroom.bench.adapters import (
+    GzipAdapter,
+    RawAdapter,
+    UnavailableAdapter,
+    get_adapters,
+)
+from headroom.bench.scorer import score
+from headroom.bench.reporter import write_csv, write_markdown
+
+
+# ---- loader ---------------------------------------------------------------
+
+
+class TestLoader:
+    def test_load_builtin_sre_logs(self) -> None:
+        ds = load_builtin("sre_logs")
+        assert ds.name == "sre_logs"
+        assert ds.category == "numeric"
+        assert len(ds.records) == 200
+        assert ds.checksum  # non-empty hash
+
+    def test_load_builtin_geo(self) -> None:
+        ds = load_builtin("geo_search")
+        assert ds.category == "numeric"
+        assert len(ds.records) == 150
+
+    def test_load_builtin_metrics(self) -> None:
+        ds = load_builtin("metrics_timeseries")
+        assert len(ds.records) == 300
+
+    def test_load_builtin_adversarial(self) -> None:
+        ds = load_builtin("adversarial_floats")
+        assert ds.category == "adversarial"
+        assert len(ds.records) == 60
+
+    def test_load_builtin_unknown_raises(self) -> None:
+        with pytest.raises(ValueError, match="Unknown dataset"):
+            load_builtin("nonexistent")
+
+    def test_load_suite_all(self) -> None:
+        datasets = load_suite("all")
+        assert len(datasets) == len(SUITES["all"])
+        names = {d.name for d in datasets}
+        assert names == set(SUITES["all"])
+
+    def test_load_suite_unknown_raises(self) -> None:
+        with pytest.raises(ValueError, match="Unknown suite"):
+            load_suite("nonexistent")
+
+    def test_load_file(self, tmp_path: pytest.TempPathFactory) -> None:
+        data = {"results": [{"id": i, "val": i * 2} for i in range(10)]}
+        p = tmp_path / "test_data.json"
+        p.write_text(json.dumps(data))
+        ds = load_file(p)
+        assert ds.name == "test_data"
+        assert ds.category == "custom"
+        assert len(ds.records) == 10
+
+    def test_datasets_are_deterministic(self) -> None:
+        """Same seed -> same checksum."""
+        a = load_builtin("sre_logs")
+        b = load_builtin("sre_logs")
+        assert a.checksum == b.checksum
+        assert a.raw_json == b.raw_json
+
+
+# ---- adapters --------------------------------------------------------------
+
+
+class TestAdapters:
+    def test_raw_adapter_identity(self) -> None:
+        adapter = RawAdapter()
+        out = adapter.compress("hello world")
+        assert out.text == "hello world"
+        assert out.chars_before == out.chars_after
+        assert out.reversible is True
+        assert out.error is None
+
+    def test_gzip_adapter_compresses_bytes(self) -> None:
+        adapter = GzipAdapter()
+        context = "a" * 10_000
+        out = adapter.compress(context)
+        assert out.adapter_name == "gzip"
+        # gzip should compress repeated chars well (bytes, not tokens)
+        assert out.chars_after < out.chars_before
+        # text is unchanged (gzip is storage-only)
+        assert out.text == context
+        assert out.latency_ms >= 0
+
+    def test_unavailable_adapter_returns_error(self) -> None:
+        adapter = UnavailableAdapter("rtk")
+        out = adapter.compress("test")
+        assert out.error == "adapter not available"
+        assert out.text == "test"
+
+    def test_get_adapters_default(self) -> None:
+        adapters = get_adapters()
+        names = [a.name for a in adapters]
+        assert "raw" in names
+        assert "gzip" in names
+        assert "headroom" in names
+
+    def test_get_adapters_with_unavailable(self) -> None:
+        adapters = get_adapters(include_unavailable=True)
+        names = [a.name for a in adapters]
+        assert "rtk" in names
+        assert "lean-ctx" in names
+
+
+# ---- scorer ----------------------------------------------------------------
+
+
+class TestScorer:
+    def test_score_raw_adapter(self) -> None:
+        ds = load_builtin("sre_logs")
+        raw = RawAdapter()
+        out = raw.compress(ds.raw_json)
+        result = score(ds, out, tokenizer_name="cl100k_base")
+        assert result.adapter == "raw"
+        assert result.tokens_saved_pct == 0.0
+        assert result.tokens_before == result.tokens_after
+        assert result.tokens_before > 0
+
+    def test_score_gzip_no_token_savings(self) -> None:
+        ds = load_builtin("sre_logs")
+        gz = GzipAdapter()
+        out = gz.compress(ds.raw_json)
+        result = score(ds, out, tokenizer_name="cl100k_base")
+        # gzip doesn't change text -> no token savings
+        assert result.tokens_saved_pct == 0.0
+
+    def test_score_with_error(self) -> None:
+        ds = load_builtin("sre_logs")
+        out = CompressedOutput(
+            adapter_name="broken",
+            text=ds.raw_json,
+            chars_before=len(ds.raw_json),
+            chars_after=len(ds.raw_json),
+            error="something went wrong",
+        )
+        result = score(ds, out)
+        assert result.error == "something went wrong"
+
+
+# ---- reporter --------------------------------------------------------------
+
+
+class TestReporter:
+    @pytest.fixture()
+    def sample_results(self) -> list[BenchResult]:
+        return [
+            BenchResult(
+                adapter="raw",
+                dataset="sre_logs",
+                category="numeric",
+                tokenizer_name="cl100k_base",
+                tokens_before=5000,
+                tokens_after=5000,
+                tokens_saved_pct=0.0,
+                chars_before=20000,
+                chars_after=20000,
+                latency_ms=0.0,
+                reversible=True,
+            ),
+            BenchResult(
+                adapter="headroom",
+                dataset="sre_logs",
+                category="numeric",
+                tokenizer_name="cl100k_base",
+                tokens_before=5000,
+                tokens_after=1500,
+                tokens_saved_pct=70.0,
+                chars_before=20000,
+                chars_after=6000,
+                latency_ms=3.5,
+                reversible=True,
+            ),
+        ]
+
+    def test_write_csv_structure(self, sample_results: list[BenchResult]) -> None:
+        text = write_csv(sample_results)
+        reader = csv.DictReader(io.StringIO(text))
+        rows = list(reader)
+        assert len(rows) == 2
+        assert rows[0]["adapter"] == "raw"
+        assert rows[1]["adapter"] == "headroom"
+        assert rows[1]["saved_pct"] == "70.0"
+
+    def test_write_csv_to_file(
+        self, sample_results: list[BenchResult], tmp_path: pytest.TempPathFactory
+    ) -> None:
+        p = tmp_path / "out.csv"
+        with open(p, "w", newline="") as f:
+            write_csv(sample_results, f)
+        content = p.read_text()
+        assert "raw" in content
+        assert "headroom" in content
+
+    def test_write_markdown_contains_table(
+        self, sample_results: list[BenchResult]
+    ) -> None:
+        md = write_markdown(sample_results)
+        assert "sre_logs" in md
+        assert "raw" in md
+        assert "headroom" in md
+        assert "70%" in md
+        assert "---" in md
+
+    def test_write_markdown_error_shown(self) -> None:
+        results = [
+            BenchResult(
+                adapter="broken",
+                dataset="test",
+                category="test",
+                tokenizer_name="cl100k_base",
+                tokens_before=100,
+                tokens_after=100,
+                tokens_saved_pct=0.0,
+                chars_before=400,
+                chars_after=400,
+                latency_ms=0.0,
+                reversible=None,
+                error="adapter not available",
+            ),
+        ]
+        md = write_markdown(results)
+        assert "err" in md
+        assert "adapter not available" in md
+
+
+# ---- _types ----------------------------------------------------------------
+
+
+class TestTypes:
+    def test_dataset_checksum_auto(self) -> None:
+        ds = Dataset(
+            name="t",
+            category="test",
+            raw_json='{"a":1}',
+            records=[{"a": 1}],
+        )
+        assert len(ds.checksum) == 16
+
+    def test_suite_config_defaults(self) -> None:
+        cfg = SuiteConfig()
+        assert cfg.suites == ["all"]
+        assert cfg.tokenizers == ["cl100k_base"]
