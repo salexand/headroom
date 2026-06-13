@@ -30,7 +30,7 @@
 
 **ColumnarFold saves 56% of tokens** across all workloads, with dictionary
 encoding for low-cardinality strings and a RECURRENCE codec for linear-
-recurrence integer sequences (Fibonacci-like, exponential, trace-unit). RTK achieves 99%
+recurrence integer sequences (Fibonacci-like, exponential, geometric). RTK achieves 99%
 but is lossy -- it truncates arrays to one example + count and scores **0%
 answer fidelity**. ColumnarFold is the only tool that achieves meaningful
 savings and remains fully reversible.
@@ -107,10 +107,10 @@ coefficients + initial values. Per-column breakdown:
 | lucas_like (T_r = T_{r-1} + T_{r-2}) | 490 tokens (DELTA) | 22 tokens | RECURRENCE2 |
 | exponential (T_r = 3*T_{r-1}) | 201 tokens (RAW) | 18 tokens | RECURRENCE1 |
 
-These sequences arise from algebraic trace constructions: the trace
-T_r = Tr(theta * u^r) of an algebraic unit u satisfies a linear recurrence
-whose order equals the field degree. The RECURRENCE codec is the practical
-compression application of this number-theoretic structure.
+Any integer sequence satisfying a linear recurrence of order d is
+compressible to 2d values (d coefficients + d initial conditions).
+The codec detects the recurrence empirically via exact rational
+arithmetic — no domain knowledge required.
 
 ## NumericFold vs ColumnarFold
 

@@ -342,7 +342,7 @@ This fork extends upstream Headroom with **lossless, structure-aware compression
 | `POLY_k` | polynomial growth | `0,3,8,15,...` | `k+1` coefficients |
 | `DELTA` | small step-to-step changes | jittery timestamps | base + deltas |
 | `RATIONAL` | hidden fractions (continued-fraction convergents) | `3.14159...` -> `355/113` | the fraction |
-| `RECURRENCE` | linear recurrence (Fibonacci-like, exponential, trace sequences) | `1,3,11,41,153,...` | coefficients + initial values |
+| `RECURRENCE` | linear recurrence (Fibonacci-like, exponential, geometric) | `1,3,11,41,153,...` | coefficients + initial values |
 
 **ColumnarFold** builds on NumericFold by transposing the leftover non-numeric columns into a single CSV block where each key appears once in the header instead of once per row:
 
@@ -380,7 +380,7 @@ Single-command, reproducible benchmark: `python -m headroom.bench run --suite al
 | rtk | 662 | 99% | No |
 | lean-ctx | 61,596 | -- | No |
 
-ColumnarFold saves **56% of all tokens** across every workload type, including a new RECURRENCE codec that catches Fibonacci-like, exponential, and trace-unit sequences (89% savings on recurrence data). RTK achieves 99% but is lossy (0% answer fidelity). ColumnarFold is the only tool that compresses meaningfully **and** stays fully reversible.
+ColumnarFold saves **56% of all tokens** across every workload type, including a RECURRENCE codec for integer sequences following linear recurrences (89% savings on recurrence-patterned data). RTK achieves 99% but is lossy (0% answer fidelity). ColumnarFold is the only tool that compresses meaningfully **and** stays fully reversible.
 
 **Coverage heatmap** (% tokens saved by category):
 
