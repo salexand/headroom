@@ -55,7 +55,7 @@ def _extract_records(obj: Any) -> list[dict[str, Any]] | None:
     if isinstance(obj, list) and obj and all(isinstance(x, dict) for x in obj):
         return obj
     if isinstance(obj, dict):
-        for k in ("results", "data", "items", "rows", "records"):
+        for k in ("results", "data", "items", "rows", "records", "matches", "issues", "files", "entries", "series"):
             v = obj.get(k)
             if isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
                 return v
