@@ -156,6 +156,10 @@ def reference_answer(context: str, qa: QA) -> str:
     This is a deterministic check — if it gets 100%, the compressed
     form provably contains all needed information.
     """
+    # Check for ColumnarFold format: starts with "n=<digits>|cols:"
+    if context.startswith("n=") and "|cols:" in context.split("\n", 1)[0]:
+        return _reference_from_columnar(context, qa)
+
     try:
         obj = json.loads(context)
     except (json.JSONDecodeError, ValueError):
@@ -210,6 +214,142 @@ def _answer_from_records(records: list[dict[str, Any]], qa: QA) -> str:
         return "<unanswered>"
 
     return "<unanswered>"
+
+
+def _reference_from_columnar(context: str, qa: QA) -> str:
+    """Answer from a ColumnarFold-compressed output by reconstructing records."""
+    try:
+        from ..transforms.columnar_fold import reconstruct_columnar
+        import re as _re
+
+        # Parse the header to get n
+        header_line = context.split("\n", 1)[0]
+        n_match = _re.match(r"n=(\d+)", header_line)
+        if not n_match:
+            return "<parse_error>"
+        n = int(n_match.group(1))
+
+        if qa.qtype == "COUNT":
+            return str(n)
+
+        # Full reconstruction requires the recipe, which we don't have in the
+        # compressed text alone. But we CAN parse the CSV portion directly for
+        # non-numeric lookups, and read closed-form columns from the header.
+
+        lines = context.split("\n")
+        # Skip header and @dict: lines to find CSV
+        csv_start = 1
+        dict_maps: dict[str, list[str]] = {}
+        while csv_start < len(lines) and lines[csv_start].startswith("@dict:"):
+            # Parse @dict:key=val1,val2,val3
+            dict_line = lines[csv_start][6:]  # strip "@dict:"
+            eq_pos = dict_line.index("=")
+            dk = dict_line[:eq_pos]
+            dv = dict_line[eq_pos + 1:].split(",")
+            dict_maps[dk] = dv
+            csv_start += 1
+
+        # Parse CSV portion
+        if csv_start < len(lines):
+            import csv
+            import io
+
+            csv_text = "\n".join(lines[csv_start:])
+            reader = list(csv.reader(io.StringIO(csv_text)))
+            if len(reader) > 1:
+                csv_header = reader[0]
+                csv_rows = reader[1:]
+
+                # Build records from CSV (non-numeric columns only)
+                csv_records: list[dict[str, Any]] = []
+                for row in csv_rows:
+                    rec: dict[str, Any] = {}
+                    for ci, k in enumerate(csv_header):
+                        if k == "_i":
+                            continue
+                        if ci < len(row):
+                            val = row[ci]
+                            # Decode dictionary-encoded values
+                            if k in dict_maps:
+                                try:
+                                    val = dict_maps[k][int(val)]
+                                except (ValueError, IndexError):
+                                    pass
+                            rec[k] = val
+                    csv_records.append(rec)
+
+                # Try to answer from CSV records
+                key_m = _re.search(r"'([^']+)'", qa.question)
+                key = key_m.group(1) if key_m else None
+                idx_m = _re.search(r"index (\d+)", qa.question)
+
+                if qa.qtype == "NONNUMERIC" and key and idx_m:
+                    idx = int(idx_m.group(1))
+                    if 0 <= idx < len(csv_records) and key in csv_records[idx]:
+                        return str(csv_records[idx][key])
+
+                if qa.qtype == "LOOKUP" and key and idx_m:
+                    idx = int(idx_m.group(1))
+                    if 0 <= idx < len(csv_records) and key in csv_records[idx]:
+                        return _fmt(csv_records[idx][key])
+
+                if qa.qtype == "AGGREGATE" and key:
+                    vals = []
+                    for r in csv_records:
+                        if key in r:
+                            try:
+                                vals.append(float(r[key]))
+                            except (ValueError, TypeError):
+                                pass
+                    if vals:
+                        return _fmt(max(vals))
+
+        # For numeric columns in the header (closed-form), parse codec strings
+        # e.g. "id=AFFINE(a0=0,d=1,n=100)"
+        key_m = _re.search(r"'([^']+)'", qa.question)
+        key = key_m.group(1) if key_m else None
+        idx_m = _re.search(r"index (\d+)", qa.question)
+
+        if key and f"{key}=" in header_line:
+            codec_m = _re.search(rf"{key}=(\w+)\(([^)]+)\)", header_line)
+            if codec_m:
+                codec = codec_m.group(1)
+                params = codec_m.group(2)
+
+                if codec == "CONST" and qa.qtype in ("LOOKUP", "AGGREGATE", "CONSTANT"):
+                    # CONST(value)xN — all values are the same
+                    val_m = _re.match(r"(.+)", params)
+                    if val_m:
+                        return _fmt(float(val_m.group(1)))
+
+                if codec == "AFFINE" and idx_m:
+                    # AFFINE(a0=X,d=Y,n=Z) — value at i = a0 + d*i
+                    a0_m = _re.search(r"a0=([^,]+)", params)
+                    d_m = _re.search(r"d=([^,]+)", params)
+                    if a0_m and d_m:
+                        a0 = float(a0_m.group(1))
+                        d = float(d_m.group(1))
+                        idx = int(idx_m.group(1))
+                        val = a0 + d * idx
+                        return _fmt(val)
+
+                if codec == "AFFINE" and qa.qtype == "AGGREGATE":
+                    a0_m = _re.search(r"a0=([^,]+)", params)
+                    d_m = _re.search(r"d=([^,]+)", params)
+                    n_m = _re.search(r"n=(\d+)", params)
+                    if a0_m and d_m and n_m:
+                        a0 = float(a0_m.group(1))
+                        d = float(d_m.group(1))
+                        nn = int(n_m.group(1))
+                        if d >= 0:
+                            return _fmt(a0 + d * (nn - 1))
+                        else:
+                            return _fmt(a0)
+
+        return "<unanswered>"
+    except Exception as e:
+        logger.debug("ColumnarFold reference reader failed: %s", e)
+        return "<unanswered>"
 
 
 def _reference_from_folded(obj: dict[str, Any], qa: QA) -> str:
