@@ -216,6 +216,60 @@ class NumericFoldAdapter:
 
 
 # ---------------------------------------------------------------------------
+# columnar-fold — ColumnarFold adapter (NumericFold + CSV key dedup)
+# ---------------------------------------------------------------------------
+
+
+class ColumnarFoldAdapter:
+    """ColumnarFold — NumericFold codecs + CSV transposition for residuals.
+
+    Saves more than NumericFold alone on data with non-numeric columns
+    by deduplicating column keys via CSV header.
+    """
+
+    name: str = "columnar-fold"
+
+    def compress(self, context: str) -> CompressedOutput:
+        t0 = time.perf_counter()
+        try:
+            from ..transforms.columnar_fold import columnar_fold
+
+            result = columnar_fold(context)
+
+            if result is None:
+                elapsed = (time.perf_counter() - t0) * 1000
+                return CompressedOutput(
+                    adapter_name=self.name,
+                    text=context,
+                    chars_before=len(context),
+                    chars_after=len(context),
+                    latency_ms=elapsed,
+                    reversible=True,
+                )
+
+            elapsed = (time.perf_counter() - t0) * 1000
+            return CompressedOutput(
+                adapter_name=self.name,
+                text=result.folded_text,
+                chars_before=len(context),
+                chars_after=len(result.folded_text),
+                latency_ms=elapsed,
+                reversible=True,
+            )
+        except Exception as e:
+            elapsed = (time.perf_counter() - t0) * 1000
+            logger.debug("ColumnarFoldAdapter failed: %s", e)
+            return CompressedOutput(
+                adapter_name=self.name,
+                text=context,
+                chars_before=len(context),
+                chars_after=len(context),
+                latency_ms=elapsed,
+                error=f"{type(e).__name__}: {e}",
+            )
+
+
+# ---------------------------------------------------------------------------
 # RTK — CLI command-output rewriting (subprocess)
 # ---------------------------------------------------------------------------
 
@@ -471,6 +525,7 @@ _FAST_ADAPTERS: list[Adapter] = [
     RawAdapter(),
     GzipAdapter(),
     NumericFoldAdapter(),
+    ColumnarFoldAdapter(),
 ]
 
 # Competitor adapters with their availability checks
