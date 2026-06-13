@@ -123,23 +123,24 @@ Granular extras: `[proxy]`, `[mcp]`, `[ml]`, `[code]`, `[memory]`, `[relevance]`
 
 Reproduce: `python -m headroom.evals suite --tier 1` · [Full benchmarks & methodology](https://headroom-docs.vercel.app/docs/benchmarks)
 
-**This fork's added value (ColumnarFold + dictionary codec) -- 52% aggregate savings, fully reversible:**
+**This fork's added value (ColumnarFold + dictionary + recurrence codecs) -- 56% aggregate savings, fully reversible:**
 
 | Dataset | Before | After | Saved | Reversible |
 |---------|-------:|------:|------:|:----------:|
+| Recurrence sequences (100 rows) | 4,327 | 496 | **89%** | Yes |
 | Timeseries (250 rows) | 7,504 | 1,575 | **79%** | Yes |
 | Geo search (150 rows) | 4,354 | 960 | **78%** | Yes |
-| Metrics timeseries (300 rows) | 6,573 | 2,441 | **63%** | Yes |
+| Metrics timeseries (300 rows) | 6,573 | 1,859 | **72%** | Yes |
 | SRE logs (200 rows) | 5,604 | 2,069 | **63%** | Yes |
-| API response (200 rows) | 11,844 | 5,278 | **55%** | Yes |
-| Code search (80 results) | 2,585 | 1,343 | **48%** | Yes |
+| API response (200 rows) | 11,849 | 5,278 | **55%** | Yes |
+| Code search (80 results) | 2,617 | 1,341 | **49%** | Yes |
 | Near progression (80 rows) | 1,126 | 666 | **41%** | Yes |
-| GitHub issues (100 issues) | 5,009 | 3,070 | **39%** | Yes |
-| Mixed types (60 rows) | 1,125 | 686 | **39%** | Yes |
-| Codebase exploration (120 files) | 3,748 | 2,575 | **31%** | Yes |
+| Mixed types (60 rows) | 1,128 | 689 | **39%** | Yes |
+| GitHub issues (100 issues) | 5,048 | 3,112 | **38%** | Yes |
+| Codebase exploration (120 files) | 3,747 | 2,574 | **31%** | Yes |
 | Adversarial floats (60 rows) | 1,494 | 1,154 | **23%** | Yes |
-| Embeddings (100 rows) | 6,228 | 5,353 | **14%** | Yes |
-| **All 12 datasets** | **57,194** | **27,170** | **52%** | **Yes** |
+| Embeddings (100 rows) | 6,225 | 5,350 | **14%** | Yes |
+| **All 13 datasets** | **61,596** | **27,123** | **56%** | **Yes** |
 
 Competitors: RTK achieves 99% but is lossy (0% answer fidelity -- truncated arrays can't answer per-record questions). ColumnarFold is the only tool that compresses meaningfully **and** stays fully reversible.
 
@@ -341,6 +342,7 @@ This fork extends upstream Headroom with **lossless, structure-aware compression
 | `POLY_k` | polynomial growth | `0,3,8,15,...` | `k+1` coefficients |
 | `DELTA` | small step-to-step changes | jittery timestamps | base + deltas |
 | `RATIONAL` | hidden fractions (continued-fraction convergents) | `3.14159...` -> `355/113` | the fraction |
+| `RECURRENCE` | linear recurrence (Fibonacci-like, exponential, trace sequences) | `1,3,11,41,153,...` | coefficients + initial values |
 
 **ColumnarFold** builds on NumericFold by transposing the leftover non-numeric columns into a single CSV block where each key appears once in the header instead of once per row:
 
@@ -372,13 +374,13 @@ Single-command, reproducible benchmark: `python -m headroom.bench run --suite al
 
 | Tool | Tokens | Saved | Reversible |
 |------|-------:|------:|:----------:|
-| raw | 57,194 | -- | Yes |
-| numeric-fold | 38,123 | 33% | Yes |
-| **columnar-fold** | **27,170** | **52%** | **Yes** |
+| raw | 61,596 | -- | Yes |
+| numeric-fold | 38,123 | 38% | Yes |
+| **columnar-fold** | **27,123** | **56%** | **Yes** |
 | rtk | 662 | 99% | No |
-| lean-ctx | 57,194 | -- | No |
+| lean-ctx | 61,596 | -- | No |
 
-ColumnarFold saves **52% of all tokens** across every workload type. RTK achieves 99% but is lossy (0% answer fidelity). ColumnarFold is the only tool that compresses meaningfully **and** stays fully reversible.
+ColumnarFold saves **56% of all tokens** across every workload type, including a new RECURRENCE codec that catches Fibonacci-like, exponential, and trace-unit sequences (89% savings on recurrence data). RTK achieves 99% but is lossy (0% answer fidelity). ColumnarFold is the only tool that compresses meaningfully **and** stays fully reversible.
 
 **Coverage heatmap** (% tokens saved by category):
 
