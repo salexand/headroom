@@ -90,8 +90,11 @@ def run(
 
     # Report
     click.echo("")
+    header = reporter.write_fairness_header(results)
     md_text = reporter.write_markdown(results)
-    click.echo(md_text)
+    full_report = header + md_text
+
+    click.echo(full_report)
 
     if cfg.output_csv:
         with open(cfg.output_csv, "w", newline="") as f:
@@ -100,7 +103,7 @@ def run(
 
     if cfg.output_md:
         with open(cfg.output_md, "w") as f:
-            f.write(md_text)
+            f.write(full_report)
         click.echo(f"Markdown written to {cfg.output_md}")
 
 

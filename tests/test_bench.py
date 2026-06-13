@@ -28,7 +28,12 @@ from headroom.bench.adapters import (
     get_adapters,
 )
 from headroom.bench.scorer import score
-from headroom.bench.reporter import write_csv, write_markdown
+from headroom.bench.reporter import (
+    write_coverage_heatmap,
+    write_csv,
+    write_fairness_header,
+    write_markdown,
+)
 
 
 # ---- loader ---------------------------------------------------------------
@@ -395,6 +400,57 @@ class TestReporter:
         md = write_markdown(results)
         assert "err" in md
         assert "adapter not available" in md
+
+    def test_write_markdown_aggregate_table(
+        self, sample_results: list[BenchResult]
+    ) -> None:
+        md = write_markdown(sample_results)
+        assert "AGGREGATE" in md
+
+    def test_write_coverage_heatmap(self) -> None:
+        results = [
+            BenchResult(
+                adapter="raw", dataset="d1", category="numeric",
+                tokenizer_name="cl100k_base", tokens_before=100,
+                tokens_after=100, tokens_saved_pct=0.0,
+                chars_before=400, chars_after=400, latency_ms=0.0,
+                reversible=True,
+            ),
+            BenchResult(
+                adapter="numeric-fold", dataset="d1", category="numeric",
+                tokenizer_name="cl100k_base", tokens_before=100,
+                tokens_after=40, tokens_saved_pct=60.0,
+                chars_before=400, chars_after=160, latency_ms=1.0,
+                reversible=True,
+            ),
+            BenchResult(
+                adapter="raw", dataset="d2", category="agent",
+                tokenizer_name="cl100k_base", tokens_before=200,
+                tokens_after=200, tokens_saved_pct=0.0,
+                chars_before=800, chars_after=800, latency_ms=0.0,
+                reversible=True,
+            ),
+            BenchResult(
+                adapter="numeric-fold", dataset="d2", category="agent",
+                tokenizer_name="cl100k_base", tokens_before=200,
+                tokens_after=180, tokens_saved_pct=10.0,
+                chars_before=800, chars_after=720, latency_ms=1.0,
+                reversible=True,
+            ),
+        ]
+        heatmap = write_coverage_heatmap(results)
+        assert "Coverage Heatmap" in heatmap
+        assert "numeric" in heatmap
+        assert "agent" in heatmap
+        assert "numeric-fold" in heatmap
+        assert "60%" in heatmap
+
+    def test_write_fairness_header(self, sample_results: list[BenchResult]) -> None:
+        header = write_fairness_header(sample_results)
+        assert "Benchmark Report" in header
+        assert "Commit" in header
+        assert "cl100k_base" in header
+        assert "Reproduce" in header
 
 
 # ---- CLI -------------------------------------------------------------------
