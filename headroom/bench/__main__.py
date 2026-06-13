@@ -6,7 +6,7 @@ import sys
 
 import click
 
-from . import adapters, loader, reporter, scorer
+from . import adapters, fidelity, loader, reporter, scorer
 from ._types import BenchResult, SuiteConfig
 
 
@@ -34,6 +34,7 @@ def cli() -> None:
 @click.option("--md", "md_path", default=None, help="Write markdown to this path.")
 @click.option("--competitors", is_flag=True, help="Include competitor adapters (RTK, lean-ctx).")
 @click.option("--pipeline", is_flag=True, help="Include full Headroom pipeline adapters (slow).")
+@click.option("--fidelity", "run_fidelity", is_flag=True, help="Run deterministic answer-fidelity check.")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output.")
 def run(
     suites: tuple[str, ...],
@@ -42,6 +43,7 @@ def run(
     md_path: str | None,
     competitors: bool,
     pipeline: bool,
+    run_fidelity: bool,
     verbose: bool,
 ) -> None:
     """Run the benchmark suite."""
@@ -88,11 +90,30 @@ def run(
                         f"-> {result.tokens_saved_pct:5.1f}% saved"
                     )
 
+    # Fidelity check (deterministic reference reader)
+    fidelity_results: list[fidelity.FidelityResult] = []
+    if run_fidelity:
+        click.echo("\n=== ANSWER FIDELITY (deterministic sufficiency check) ===")
+        # We need to keep the compressed outputs to re-score
+        for ds in datasets:
+            for adapter in adapter_list:
+                output = adapter.compress(ds.raw_json)
+                if output.error:
+                    continue
+                fr = fidelity.score_fidelity(ds, output.text, adapter.name)
+                fidelity_results.append(fr)
+                if cfg.verbose:
+                    click.echo(
+                        f"  {ds.name:20s} {adapter.name:12s} "
+                        f"-> {fr.correct}/{fr.total} ({fr.accuracy:.0%})"
+                    )
+
     # Report
     click.echo("")
     header = reporter.write_fairness_header(results)
     md_text = reporter.write_markdown(results)
-    full_report = header + md_text
+    fidelity_text = reporter.write_fidelity_table(fidelity_results) if fidelity_results else ""
+    full_report = header + md_text + fidelity_text
 
     click.echo(full_report)
 

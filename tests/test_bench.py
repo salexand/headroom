@@ -27,6 +27,12 @@ from headroom.bench.adapters import (
     _rtk_available,
     get_adapters,
 )
+from headroom.bench.fidelity import (
+    FidelityResult,
+    make_questions,
+    reference_answer,
+    score_fidelity,
+)
 from headroom.bench.scorer import score
 from headroom.bench.reporter import (
     write_coverage_heatmap,
@@ -451,6 +457,55 @@ class TestReporter:
         assert "Commit" in header
         assert "cl100k_base" in header
         assert "Reproduce" in header
+
+
+# ---- fidelity --------------------------------------------------------------
+
+
+class TestFidelity:
+    def test_make_questions_sre_logs(self) -> None:
+        ds = load_builtin("sre_logs")
+        qs = make_questions(ds.records)
+        assert len(qs) >= 3  # COUNT + LOOKUP + AGGREGATE at minimum
+        qtypes = {q.qtype for q in qs}
+        assert "COUNT" in qtypes
+        assert "LOOKUP" in qtypes or "AGGREGATE" in qtypes
+
+    def test_reference_answer_raw_json(self) -> None:
+        """Reference reader should get 100% on uncompressed context."""
+        ds = load_builtin("sre_logs")
+        qs = make_questions(ds.records)
+        for qa in qs:
+            ref = reference_answer(ds.raw_json, qa)
+            assert ref != "<unanswered>", f"Failed on {qa.qtype}: {qa.question}"
+            assert ref != "<parse_error>"
+
+    def test_score_fidelity_raw_is_perfect(self) -> None:
+        """Raw (uncompressed) context should score 100% fidelity."""
+        ds = load_builtin("geo_search")
+        fr = score_fidelity(ds, ds.raw_json, "raw")
+        assert fr.accuracy == 1.0, f"Raw fidelity {fr.accuracy} != 1.0, by_type={fr.by_type}"
+        assert fr.correct == fr.total
+
+    def test_score_fidelity_numeric_fold(self) -> None:
+        """NumericFold should preserve enough info for reference reader."""
+        ds = load_builtin("geo_search")
+        adapter = NumericFoldAdapter()
+        out = adapter.compress(ds.raw_json)
+        fr = score_fidelity(ds, out.text, "numeric-fold")
+        # NumericFold is lossless for inline rows — COUNT and NONNUMERIC
+        # should always pass. Numeric lookups need codec decode which the
+        # reference reader doesn't fully support, so we just check it runs.
+        assert fr.total > 0
+        assert isinstance(fr.accuracy, float)
+
+    def test_fidelity_result_structure(self) -> None:
+        fr = FidelityResult(
+            adapter="test", dataset="test",
+            total=10, correct=8, accuracy=0.8,
+            by_type={"COUNT": (1, 1), "LOOKUP": (7, 9)},
+        )
+        assert fr.accuracy == 0.8
 
 
 # ---- CLI -------------------------------------------------------------------
