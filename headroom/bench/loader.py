@@ -82,17 +82,202 @@ def _gen_adversarial(n: int = 60) -> tuple[dict[str, Any], list[dict[str, Any]]]
     return {"results": recs}, recs
 
 
+# ---------------------------------------------------------------------------
+# Agent workload generators (README's four workloads)
+# ---------------------------------------------------------------------------
+
+
+def _gen_code_search(n: int = 80) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Code search / grep results — file paths, line numbers, snippets."""
+    files = [
+        "src/auth/login.py", "src/auth/session.py", "src/api/routes.py",
+        "src/api/middleware.py", "src/db/models.py", "src/db/queries.py",
+        "src/utils/helpers.py", "src/utils/cache.py", "tests/test_auth.py",
+        "tests/test_api.py", "lib/config.ts", "lib/hooks.ts",
+    ]
+    snippets = [
+        "def authenticate(user, password):",
+        "session.verify_token(token)",
+        "return JsonResponse(data, status=200)",
+        "raise PermissionError('unauthorized')",
+        "query = db.select(User).where(id=uid)",
+        "cache.set(key, value, ttl=300)",
+        "assert response.status_code == 200",
+        "import { useAuth } from './hooks'",
+    ]
+    recs = [
+        {
+            "file": _RNG.choice(files),
+            "line": _RNG.randint(1, 500),
+            "col": _RNG.randint(1, 80),
+            "snippet": _RNG.choice(snippets),
+            "score": round(_RNG.uniform(0.5, 1.0), 4),
+        }
+        for i in range(n)
+    ]
+    return {"matches": recs}, recs
+
+
+def _gen_github_issues(n: int = 100) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """GitHub issue triage — issue metadata with numeric fields."""
+    labels = ["bug", "feature", "docs", "perf", "security", "chore"]
+    states = ["open", "closed"]
+    recs = [
+        {
+            "number": 1000 + i,
+            "title": f"Issue #{1000 + i}: {_RNG.choice(['Fix', 'Add', 'Update', 'Remove'])} "
+                     f"{_RNG.choice(['auth', 'cache', 'API', 'UI', 'DB', 'tests'])}",
+            "state": _RNG.choice(states),
+            "labels": [_RNG.choice(labels)],
+            "comments": _RNG.randint(0, 50),
+            "reactions": _RNG.randint(0, 20),
+            "created_at": f"2026-{_RNG.randint(1, 6):02d}-{_RNG.randint(1, 28):02d}",
+            "closed_at": f"2026-{_RNG.randint(1, 6):02d}-{_RNG.randint(1, 28):02d}"
+                         if _RNG.random() > 0.4 else None,
+        }
+        for i in range(n)
+    ]
+    return {"issues": recs}, recs
+
+
+def _gen_codebase_exploration(n: int = 120) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Codebase exploration — file tree with sizes, line counts, types."""
+    extensions = [".py", ".ts", ".js", ".go", ".rs", ".md", ".json", ".yaml"]
+    dirs = [
+        "src/", "src/api/", "src/auth/", "src/db/", "src/utils/",
+        "tests/", "lib/", "docs/", "scripts/", "config/",
+    ]
+    recs = [
+        {
+            "path": f"{_RNG.choice(dirs)}{_RNG.choice(['main', 'index', 'utils', 'helpers', 'config', 'test_' + str(i)])}{_RNG.choice(extensions)}",
+            "size_bytes": _RNG.randint(100, 50000),
+            "lines": _RNG.randint(10, 2000),
+            "last_modified": f"2026-{_RNG.randint(1, 6):02d}-{_RNG.randint(1, 28):02d}",
+            "language": _RNG.choice(["python", "typescript", "go", "rust", "markdown"]),
+        }
+        for i in range(n)
+    ]
+    return {"files": recs}, recs
+
+
+# ---------------------------------------------------------------------------
+# Numeric-heavy generators (the fork's home turf)
+# ---------------------------------------------------------------------------
+
+
+def _gen_api_response(n: int = 200) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """API/metrics response — dense numeric columns, typical dashboard data."""
+    recs = [
+        {
+            "endpoint": _RNG.choice(["/api/users", "/api/orders", "/api/health", "/api/search"]),
+            "timestamp": 1718200000 + 60 * i,
+            "requests": 1000 + i * 5,
+            "errors": _RNG.randint(0, 10),
+            "p50_ms": round(12.0 + _RNG.gauss(0, 2), 2),
+            "p95_ms": round(45.0 + _RNG.gauss(0, 5), 2),
+            "p99_ms": round(120.0 + _RNG.gauss(0, 15), 2),
+            "cpu_pct": round(_RNG.uniform(20, 80), 1),
+            "mem_mb": round(512 + _RNG.gauss(0, 30), 1),
+        }
+        for i in range(n)
+    ]
+    return {"data": recs}, recs
+
+
+def _gen_embeddings(n: int = 100) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Embedding/score arrays — high-dimensional numeric data."""
+    recs = [
+        {
+            "id": f"doc-{i}",
+            "score": round(_RNG.uniform(0.0, 1.0), 6),
+            "embedding": [round(_RNG.gauss(0, 1), 4) for _ in range(8)],
+            "rank": i + 1,
+            "tokens": _RNG.randint(50, 500),
+        }
+        for i in range(n)
+    ]
+    return {"results": recs}, recs
+
+
+def _gen_timeseries(n: int = 250) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Dense timeseries — monotonic timestamps, polynomial trends."""
+    base_t = 1718200000
+    recs = [
+        {
+            "t": base_t + i,
+            "value": round(100 + 0.5 * i + 0.001 * i * i + _RNG.gauss(0, 3), 3),
+            "min": round(90 + 0.4 * i, 2),
+            "max": round(110 + 0.6 * i, 2),
+            "count": 1000 + 10 * i,
+        }
+        for i in range(n)
+    ]
+    return {"series": recs}, recs
+
+
+# ---------------------------------------------------------------------------
+# Adversarial generators (robustness)
+# ---------------------------------------------------------------------------
+
+
+def _gen_near_progression(n: int = 80) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Near-but-not-quite arithmetic progression — must not be falsely folded."""
+    recs = [
+        {
+            "id": i,
+            "value": 100 + 5 * i + (0.01 if i == n // 2 else 0),  # one perturbation
+            "other": round(_RNG.uniform(0, 100), 2),
+        }
+        for i in range(n)
+    ]
+    return {"results": recs}, recs
+
+
+def _gen_mixed_types(n: int = 60) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Mixed-type columns — some rows have strings where others have numbers."""
+    recs = []
+    for i in range(n):
+        rec: dict[str, Any] = {"id": i}
+        if i % 10 == 0:
+            rec["value"] = "N/A"
+            rec["score"] = None
+        else:
+            rec["value"] = _RNG.randint(1, 1000)
+            rec["score"] = round(_RNG.uniform(0, 1), 4)
+        rec["label"] = _RNG.choice(["A", "B", "C"])
+        recs.append(rec)
+    return {"results": recs}, recs
+
+
+# ---------------------------------------------------------------------------
+# Generator registry and suite definitions
+# ---------------------------------------------------------------------------
+
 _GENERATORS: dict[str, tuple[str, Any]] = {
+    # Original numeric workloads
     "sre_logs": ("numeric", _gen_logs),
     "geo_search": ("numeric", _gen_geo),
     "metrics_timeseries": ("numeric", _gen_metrics),
+    # Agent workloads (README's proof table)
+    "code_search": ("agent", _gen_code_search),
+    "github_issues": ("agent", _gen_github_issues),
+    "codebase_exploration": ("agent", _gen_codebase_exploration),
+    # Numeric-heavy (fork differentiator)
+    "api_response": ("numeric-heavy", _gen_api_response),
+    "embeddings": ("numeric-heavy", _gen_embeddings),
+    "timeseries": ("numeric-heavy", _gen_timeseries),
+    # Adversarial (robustness)
     "adversarial_floats": ("adversarial", _gen_adversarial),
+    "near_progression": ("adversarial", _gen_near_progression),
+    "mixed_types": ("adversarial", _gen_mixed_types),
 }
 
 # Suite -> dataset names
 SUITES: dict[str, list[str]] = {
     "numeric": ["sre_logs", "geo_search", "metrics_timeseries"],
-    "adversarial": ["adversarial_floats"],
+    "agent": ["code_search", "github_issues", "codebase_exploration"],
+    "numeric-heavy": ["api_response", "embeddings", "timeseries"],
+    "adversarial": ["adversarial_floats", "near_progression", "mixed_types"],
     "all": list(_GENERATORS.keys()),
 }
 
