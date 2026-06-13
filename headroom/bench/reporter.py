@@ -330,3 +330,44 @@ def write_fairness_header(
     if out is not None:
         out.write(text)
     return text
+
+
+# ---------------------------------------------------------------------------
+# Fidelity table
+# ---------------------------------------------------------------------------
+
+
+def write_fidelity_table(
+    results: list[Any],
+    out: TextIO | None = None,
+) -> str:
+    """Write answer-fidelity results as a markdown table.
+
+    Each result is a FidelityResult from headroom.bench.fidelity.
+    """
+    if not results:
+        return ""
+
+    lines: list[str] = []
+    lines.append("### Answer Fidelity (deterministic sufficiency check)")
+    lines.append("")
+    lines.append(
+        f"{'Tool':<22} {'Dataset':<22} {'Score':>10} {'Accuracy':>10}"
+    )
+    lines.append(
+        f"{'-' * 22} {'-' * 22} {'-' * 10} {'-' * 10}"
+    )
+
+    for r in results:
+        lines.append(
+            f"{r.adapter:<22} "
+            f"{r.dataset:<22} "
+            f"{r.correct}/{r.total:>6} "
+            f"{r.accuracy:>9.0%}"
+        )
+
+    lines.append("")
+    text = "\n".join(lines)
+    if out is not None:
+        out.write(text)
+    return text
