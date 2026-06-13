@@ -216,6 +216,46 @@ def _gen_timeseries(n: int = 250) -> tuple[dict[str, Any], list[dict[str, Any]]]
 
 
 # ---------------------------------------------------------------------------
+# Recurrence-pattern generators (trace-unit motivated)
+# ---------------------------------------------------------------------------
+
+
+def _gen_recurrence(n: int = 100) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Records with columns following linear recurrences.
+
+    These sequences arise naturally from algebraic trace constructions
+    (e.g. Tr(theta * u^r) for algebraic units u). Current AFFINE/POLY
+    codecs miss them; the RECURRENCE codec captures them exactly.
+    """
+    # Fibonacci-like: T_r = 4*T_{r-1} - T_{r-2}
+    fib = [1, 3]
+    for _ in range(n - 2):
+        fib.append(4 * fib[-1] - fib[-2])
+
+    # Lucas-like: T_r = T_{r-1} + T_{r-2}
+    luc = [2, 1]
+    for _ in range(n - 2):
+        luc.append(luc[-1] + luc[-2])
+
+    # Exponential: T_r = 3 * T_{r-1}
+    exp_col = [1]
+    for _ in range(n - 1):
+        exp_col.append(3 * exp_col[-1])
+
+    recs = [
+        {
+            "index": i,
+            "fib_like": fib[i],
+            "lucas_like": luc[i],
+            "exponential": exp_col[i],
+            "label": _RNG.choice(["A", "B", "C"]),
+        }
+        for i in range(n)
+    ]
+    return {"results": recs}, recs
+
+
+# ---------------------------------------------------------------------------
 # Adversarial generators (robustness)
 # ---------------------------------------------------------------------------
 
@@ -266,6 +306,8 @@ _GENERATORS: dict[str, tuple[str, Any]] = {
     "api_response": ("numeric-heavy", _gen_api_response),
     "embeddings": ("numeric-heavy", _gen_embeddings),
     "timeseries": ("numeric-heavy", _gen_timeseries),
+    # Recurrence-pattern data (trace-unit sequences)
+    "recurrence_sequences": ("recurrence", _gen_recurrence),
     # Adversarial (robustness)
     "adversarial_floats": ("adversarial", _gen_adversarial),
     "near_progression": ("adversarial", _gen_near_progression),
@@ -277,6 +319,7 @@ SUITES: dict[str, list[str]] = {
     "numeric": ["sre_logs", "geo_search", "metrics_timeseries"],
     "agent": ["code_search", "github_issues", "codebase_exploration"],
     "numeric-heavy": ["api_response", "embeddings", "timeseries"],
+    "recurrence": ["recurrence_sequences"],
     "adversarial": ["adversarial_floats", "near_progression", "mixed_types"],
     "all": list(_GENERATORS.keys()),
 }
