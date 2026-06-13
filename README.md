@@ -123,6 +123,19 @@ Granular extras: `[proxy]`, `[mcp]`, `[ml]`, `[code]`, `[memory]`, `[relevance]`
 
 Reproduce: `python -m headroom.evals suite --tier 1` · [Full benchmarks & methodology](https://headroom-docs.vercel.app/docs/benchmarks)
 
+**This fork's added value (NumericFold):**
+
+| Dataset | Before | After | Saved | Reversible |
+|---------|-------:|------:|------:|:----------:|
+| Geo search (150 rows) | 4,354 | 980 | **78%** | Yes |
+| Metrics timeseries (300 rows) | 6,573 | 2,758 | **58%** | Yes |
+| SRE logs (200 rows) | 5,604 | 3,462 | **38%** | Yes |
+| API response (200 rows) | 11,861 | 9,534 | **20%** | Yes |
+
+Competitors: RTK achieves 99% but is lossy (0% answer fidelity). NumericFold is the only tool that compresses numeric data **and** stays fully reversible.
+
+Reproduce: `python -m headroom.bench run --suite all --competitors --fidelity` · [Full benchmark report](BENCHMARKS.md)
+
 <a href="https://www.star-history.com/?repos=chopratejas%2Fheadroom&type=date&legend=top-left">
  <picture>
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=chopratejas/headroom&type=date&legend=top-left" />
