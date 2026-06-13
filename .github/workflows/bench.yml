@@ -1,0 +1,72 @@
+name: Benchmark
+
+# Deterministic axes only (no API key needed):
+#   1. Token reduction
+#   3. Reversibility
+#   4. Latency
+#   5. Coverage
+#   6. Robustness
+#
+# Runs on every PR touching bench or transforms code, and on main.
+# Live accuracy (axis 2) is deferred to a scheduled workflow.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'headroom/bench/**'
+      - 'headroom/transforms/**'
+      - 'tests/test_bench.py'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'headroom/bench/**'
+      - 'headroom/transforms/**'
+      - 'tests/test_bench.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PY_VERSION: "3.12"
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PY_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[proxy]"
+          pip install pytest tiktoken click
+
+      - name: Run benchmark tests
+        run: pytest tests/test_bench.py -v --tb=short
+
+      - name: Run deterministic benchmark suite
+        run: |
+          python -m headroom.bench run \
+            --suite all \
+            --tokenizer cl100k_base \
+            --tokenizer o200k_base \
+            --csv bench_results.csv \
+            --md bench_results.md \
+            -v
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: |
+            bench_results.csv
+            bench_results.md
+          retention-days: 30
