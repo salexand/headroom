@@ -1,6 +1,6 @@
 # Headroom Fork -- Benchmark Results
 
-> Half the tokens, fully reversible, every workload reported. The only
+> 52% fewer tokens, fully reversible, every workload reported. The only
 > tool that compresses structured data without losing the ability to
 > answer questions about it. One command to reproduce.
 
@@ -21,14 +21,15 @@
 
 | Tool | Tokens | Saved | Reversible |
 |------|-------:|------:|:----------:|
-| raw | 57,214 | -- | Yes |
-| gzip | 57,214 | -- | Yes |
-| numeric-fold | 38,137 | 33% | Yes |
-| **columnar-fold** | **28,416** | **50%** | **Yes** |
+| raw | 57,194 | -- | Yes |
+| gzip | 57,194 | -- | Yes |
+| numeric-fold | 38,123 | 33% | Yes |
+| **columnar-fold** | **27,170** | **52%** | **Yes** |
 | rtk | 662 | 99% | No |
-| lean-ctx | 57,214 | -- | No |
+| lean-ctx | 57,194 | -- | No |
 
-**ColumnarFold saves 50% of tokens** across all workloads. RTK achieves 99%
+**ColumnarFold saves 52% of tokens** across all workloads, with dictionary
+encoding for low-cardinality string columns (e.g. log levels, file paths). RTK achieves 99%
 but is lossy -- it truncates arrays to one example + count and scores **0%
 answer fidelity**. ColumnarFold is the only tool that achieves meaningful
 savings and remains fully reversible.
@@ -38,7 +39,7 @@ savings and remains fully reversible.
 | Tool | adversarial | agent | numeric | numeric-heavy |
 |------|------------:|------:|--------:|--------------:|
 | numeric-fold | 19% | 3% | 58% | 35% |
-| **columnar-fold** | **36%** | **29%** | **67%** | **49%** |
+| **columnar-fold** | **34%** | **39%** | **68%** | **41%** |
 | rtk | 97% | 98% | 99% | 99% |
 | lean-ctx | -- | -- | -- | -- |
 
@@ -57,33 +58,35 @@ ColumnarFold covers every category. Its strength scales with data structure:
 | timeseries (250 rows) | 7,504 | 1,595 | **1,575** | **79%** |
 | geo_search (150 rows) | 4,354 | 980 | **960** | **78%** |
 | metrics_timeseries (300 rows) | 6,573 | 2,758 | **2,441** | **63%** |
-| sre_logs (200 rows) | 5,604 | 3,462 | **2,181** | **61%** |
+| sre_logs (200 rows) | 5,604 | 3,462 | **2,069** | **63%** |
 
 ### Numeric-heavy
 
 | Dataset | Raw | NumericFold | ColumnarFold | CF Saved |
 |---------|----:|------------:|-------------:|---------:|
-| api_response (200 rows) | 11,845 | 9,518 | **5,501** | **54%** |
-| embeddings (100 rows) | 6,222 | 5,860 | **5,347** | **14%** |
+| api_response (200 rows) | 11,844 | 9,518 | **5,278** | **55%** |
+| embeddings (100 rows) | 6,228 | 5,860 | **5,353** | **14%** |
 
 ### Agent workloads
 
 | Dataset | Raw | NumericFold | ColumnarFold | CF Saved |
 |---------|----:|------------:|-------------:|---------:|
-| codebase_exploration (120 files) | 3,753 | 3,753 | **2,565** | **32%** |
-| github_issues (100 issues) | 5,007 | 4,555 | **3,455** | **31%** |
-| code_search (80 results) | 2,609 | 2,609 | **1,955** | **25%** |
+| code_search (80 results) | 2,585 | 2,585 | **1,343** | **48%** |
+| github_issues (100 issues) | 5,009 | 4,555 | **3,070** | **39%** |
+| codebase_exploration (120 files) | 3,748 | 3,748 | **2,575** | **31%** |
 
 NumericFold can't touch agent workloads (mostly text). ColumnarFold's CSV
-key dedup saves 25-32% even when there are no numeric patterns to exploit.
+key dedup + dictionary encoding saves 31-48% even when there are no numeric
+patterns to exploit. Code search jumps to 48% because `file` (12 unique /
+80 rows) and `snippet` (8 unique / 80) are dictionary-encoded.
 
 ### Adversarial
 
 | Dataset | Raw | NumericFold | ColumnarFold | CF Saved |
 |---------|----:|------------:|-------------:|---------:|
-| mixed_types (60 rows) | 1,126 | 922 | **619** | **45%** |
 | near_progression (80 rows) | 1,126 | 840 | **666** | **41%** |
-| adversarial_floats (60 rows) | 1,491 | 1,285 | **1,151** | **23%** |
+| mixed_types (60 rows) | 1,125 | 922 | **686** | **39%** |
+| adversarial_floats (60 rows) | 1,494 | 1,285 | **1,154** | **23%** |
 
 No false structure fabricated, no data corruption.
 
@@ -96,10 +99,10 @@ comes from key dedup -- in JSON, every row repeats `"id":`, `"level":`,
 
 | Metric | NumericFold | ColumnarFold | Improvement |
 |--------|----------:|-------------:|------------:|
-| Aggregate savings | 33% | **50%** | +17 points |
+| Aggregate savings | 33% | **52%** | +19 points |
 | Datasets with >0% savings | 10/12 | **12/12** | +2 datasets |
 | Best single dataset | 79% | **79%** | tied |
-| Agent workload savings | 3% | **29%** | +26 points |
+| Agent workload savings | 3% | **39%** | +36 points |
 
 ## Answer Fidelity
 
@@ -127,7 +130,7 @@ A live LLM reads CSV natively and would score comparably to raw.
 
 | Tool | Savings | Reversible | Fidelity | Latency | Notes |
 |------|--------:|:----------:|---------:|--------:|-------|
-| **ColumnarFold** | **50%** | **Yes** | lossless* | 1-3 ms/KB | Structure-aware, exact |
+| **ColumnarFold** | **52%** | **Yes** | lossless* | 1-3 ms/KB | Structure-aware, exact, dict-encoded |
 | NumericFold | 33% | Yes | lossless* | 1-3 ms/KB | Numeric columns only |
 | RTK | 99% | No | 0% | 2-10 ms/KB | Lossy truncation |
 | lean-ctx | 0% | No | 100% | 0.2 ms/KB | Verbatim (no compression) |

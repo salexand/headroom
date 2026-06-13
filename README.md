@@ -123,20 +123,23 @@ Granular extras: `[proxy]`, `[mcp]`, `[ml]`, `[code]`, `[memory]`, `[relevance]`
 
 Reproduce: `python -m headroom.evals suite --tier 1` · [Full benchmarks & methodology](https://headroom-docs.vercel.app/docs/benchmarks)
 
-**This fork's added value (ColumnarFold) -- 50% aggregate savings, fully reversible:**
+**This fork's added value (ColumnarFold + dictionary codec) -- 52% aggregate savings, fully reversible:**
 
 | Dataset | Before | After | Saved | Reversible |
 |---------|-------:|------:|------:|:----------:|
 | Timeseries (250 rows) | 7,504 | 1,575 | **79%** | Yes |
 | Geo search (150 rows) | 4,354 | 960 | **78%** | Yes |
 | Metrics timeseries (300 rows) | 6,573 | 2,441 | **63%** | Yes |
-| SRE logs (200 rows) | 5,604 | 2,181 | **61%** | Yes |
-| API response (200 rows) | 11,845 | 5,501 | **54%** | Yes |
-| Mixed types (60 rows) | 1,126 | 619 | **45%** | Yes |
-| Codebase exploration (120 files) | 3,753 | 2,565 | **32%** | Yes |
-| GitHub issues (100 issues) | 5,007 | 3,455 | **31%** | Yes |
-| Code search (80 results) | 2,609 | 1,955 | **25%** | Yes |
-| **All 12 datasets** | **57,214** | **28,416** | **50%** | **Yes** |
+| SRE logs (200 rows) | 5,604 | 2,069 | **63%** | Yes |
+| API response (200 rows) | 11,844 | 5,278 | **55%** | Yes |
+| Code search (80 results) | 2,585 | 1,343 | **48%** | Yes |
+| Near progression (80 rows) | 1,126 | 666 | **41%** | Yes |
+| GitHub issues (100 issues) | 5,009 | 3,070 | **39%** | Yes |
+| Mixed types (60 rows) | 1,125 | 686 | **39%** | Yes |
+| Codebase exploration (120 files) | 3,748 | 2,575 | **31%** | Yes |
+| Adversarial floats (60 rows) | 1,494 | 1,154 | **23%** | Yes |
+| Embeddings (100 rows) | 6,228 | 5,353 | **14%** | Yes |
+| **All 12 datasets** | **57,194** | **27,170** | **52%** | **Yes** |
 
 Competitors: RTK achieves 99% but is lossy (0% answer fidelity -- truncated arrays can't answer per-record questions). ColumnarFold is the only tool that compresses meaningfully **and** stays fully reversible.
 
@@ -369,20 +372,20 @@ Single-command, reproducible benchmark: `python -m headroom.bench run --suite al
 
 | Tool | Tokens | Saved | Reversible |
 |------|-------:|------:|:----------:|
-| raw | 57,214 | -- | Yes |
-| numeric-fold | 38,137 | 33% | Yes |
-| **columnar-fold** | **28,416** | **50%** | **Yes** |
+| raw | 57,194 | -- | Yes |
+| numeric-fold | 38,123 | 33% | Yes |
+| **columnar-fold** | **27,170** | **52%** | **Yes** |
 | rtk | 662 | 99% | No |
-| lean-ctx | 57,214 | -- | No |
+| lean-ctx | 57,194 | -- | No |
 
-ColumnarFold saves **50% of all tokens** across every workload type. RTK achieves 99% but is lossy (0% answer fidelity). ColumnarFold is the only tool that compresses meaningfully **and** stays fully reversible.
+ColumnarFold saves **52% of all tokens** across every workload type. RTK achieves 99% but is lossy (0% answer fidelity). ColumnarFold is the only tool that compresses meaningfully **and** stays fully reversible.
 
 **Coverage heatmap** (% tokens saved by category):
 
 | Tool | adversarial | agent | numeric | numeric-heavy |
 |------|------------:|------:|--------:|--------------:|
 | numeric-fold | 19% | 3% | 58% | 35% |
-| **columnar-fold** | **36%** | **29%** | **67%** | **49%** |
+| **columnar-fold** | **34%** | **39%** | **68%** | **41%** |
 | rtk | 97% | 98% | 99% | 99% |
 
 The suite also includes:
