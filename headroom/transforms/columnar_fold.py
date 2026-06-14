@@ -234,6 +234,36 @@ def _build_dict(col: list[Any]) -> tuple[dict[str, int], list[str]]:
     return seen, order
 
 
+def _find_common_prefix(col: list[Any], col_type: str, min_savings: float = 0.2) -> str | None:
+    """Find a common prefix worth extracting from a string column.
+
+    Returns the prefix if it covers >min_savings of total chars, None otherwise.
+    """
+    base_type = col_type.rstrip("?")
+    if base_type != "str":
+        return None
+
+    strings = [str(v) for v in col if v is not None]
+    if len(strings) < 5:
+        return None
+
+    # Skip columns with newlines (break CSV format)
+    if any("\n" in s for s in strings):
+        return None
+
+    import os
+    prefix = os.path.commonprefix(strings)
+    if len(prefix) < 4:
+        return None
+
+    total_chars = sum(len(s) for s in strings)
+    prefix_chars = len(prefix) * len(strings)
+    if prefix_chars / total_chars < min_savings:
+        return None
+
+    return prefix
+
+
 def _csv_dumps(header: list[str], rows: list[list[str]]) -> str:
     buf = io.StringIO()
     w = csv.writer(buf, lineterminator="\n")
@@ -343,6 +373,15 @@ def _columnar_fold_inner(
             dict_encoded[k] = (mapping, order)
             per_column[k] = f"dict:{csv_types[k]}"
 
+    # Prefix-dedup high-cardinality string columns (not dict-encoded)
+    prefix_encoded: dict[str, str] = {}
+    for k in csv_keys:
+        if k not in dict_encoded:
+            prefix = _find_common_prefix(cols[k], csv_types[k])
+            if prefix:
+                prefix_encoded[k] = prefix
+                per_column[k] = f"prefix:{csv_types[k]}"
+
     # Build CSV block with explicit _i index column
     csv_text = ""
     if csv_keys:
@@ -353,17 +392,24 @@ def _columnar_fold_inner(
                 if k in dict_encoded:
                     mapping, _ = dict_encoded[k]
                     row.append(str(mapping[str(cols[k][i])]))
+                elif k in prefix_encoded:
+                    val = cols[k][i]
+                    prefix = prefix_encoded[k]
+                    s = str(val) if val is not None else ""
+                    row.append(s[len(prefix):] if s.startswith(prefix) else s)
                 else:
                     row.append(_encode_cell(cols[k][i], csv_types[k]))
             csv_rows.append(row)
         csv_text = _csv_dumps(["_i"] + csv_keys, csv_rows)
 
-    # Build dictionary lines (prepended before CSV)
+    # Build dictionary and prefix lines (prepended before CSV)
     dict_lines: list[str] = []
     for k in csv_keys:
         if k in dict_encoded:
             _, order = dict_encoded[k]
             dict_lines.append(f"@dict:{k}={','.join(order)}")
+        elif k in prefix_encoded:
+            dict_lines.append(f"@prefix:{k}={prefix_encoded[k]}")
 
     cols_str = ";".join(f"{k}={closed[k].payload_str}" for k in closed)
     header = f"n={len(records)}|cols:{cols_str}"
@@ -390,6 +436,7 @@ def _columnar_fold_inner(
         },
         "csv_types": csv_types,
         "dict_encoded": {k: order for k, (_, order) in dict_encoded.items()},
+        "prefix_encoded": prefix_encoded,
         "flattened": flattened,
     }
 
@@ -416,6 +463,7 @@ def reconstruct_columnar(folded_text: str, recipe: dict[str, Any]) -> list[dict[
     n = recipe["n"]
     schema = recipe["schema"]
     dict_encoded = recipe.get("dict_encoded", {})
+    prefix_encoded = recipe.get("prefix_encoded", {})
 
     # Closed-form columns
     closed_vals: dict[str, list[Any]] = {}
@@ -430,7 +478,9 @@ def reconstruct_columnar(folded_text: str, recipe: dict[str, Any]) -> list[dict[
     csv_vals: dict[str, list[Any]] = {}
     lines = folded_text.split("\n")
     csv_start = 1  # skip header line
-    while csv_start < len(lines) and lines[csv_start].startswith("@dict:"):
+    while csv_start < len(lines) and (
+        lines[csv_start].startswith("@dict:") or lines[csv_start].startswith("@prefix:")
+    ):
         csv_start += 1
 
     if csv_start < len(lines):
@@ -448,6 +498,14 @@ def reconstruct_columnar(folded_text: str, recipe: dict[str, Any]) -> list[dict[
                         val_str = dictionary[idx]
                         raw_vals.append(_decode_cell(val_str, types[k]))
                     csv_vals[k] = raw_vals
+                elif k in prefix_encoded:
+                    # Prepend the stored prefix to each suffix
+                    prefix = prefix_encoded[k]
+                    csv_vals[k] = [
+                        prefix + _decode_cell(r[ci], types[k])
+                        if r[ci] else _decode_cell(r[ci], types[k])
+                        for r in csv_rows
+                    ]
                 else:
                     csv_vals[k] = [_decode_cell(r[ci], types[k]) for r in csv_rows]
 
