@@ -67,7 +67,8 @@ def render(stats: dict, history: dict | None) -> str:
 
     requests = stats.get("summary", {}).get("api_requests", 0)
     compressed = comp.get("requests_compressed", 0)
-    tokens_saved = comp.get("total_tokens_saved_with_rtk", 0) or comp.get("total_tokens_removed", 0)
+    tokens_compressed = comp.get("total_tokens_removed", 0)
+    rtk_tokens = comp.get("rtk_tokens_avoided", 0) or comp.get("cli_filtering_tokens_avoided", 0)
     avg_pct = comp.get("avg_compression_pct", 0)
     best_pct = comp.get("best_compression_pct", 0)
     best_detail = comp.get("best_detail", "")
@@ -87,7 +88,15 @@ def render(stats: dict, history: dict | None) -> str:
     lines.append(f"  ---------------------------------------------")
     lines.append(f"  Requests:          {requests}")
     lines.append(f"  Compressed:        {compressed}")
-    lines.append(f"  Tokens saved:      {fmt_tokens(tokens_saved)}")
+    if tokens_compressed > 0:
+        lines.append(f"  Tokens saved (compression): {fmt_tokens(tokens_compressed)}")
+    if rtk_tokens > 0:
+        lines.append(f"  Tokens saved (RTK filter):  {fmt_tokens(rtk_tokens)}")
+    total_saved = tokens_compressed + rtk_tokens
+    if total_saved > 0:
+        lines.append(f"  Tokens saved (total):       {fmt_tokens(total_saved)}")
+    else:
+        lines.append(f"  Tokens saved:      0 (no tool outputs compressed yet)")
     if avg_pct > 0:
         lines.append(f"  Avg compression:   {fmt_pct(avg_pct)}")
     if best_pct > 0:
