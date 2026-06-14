@@ -62,25 +62,126 @@ def _extract_records(obj: Any) -> list[dict[str, Any]] | None:
     return None
 
 
+def _flatten_record(rec: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+    """Flatten nested dicts into dot-notation keys.
+
+    {"metadata": {"author": "Alice", "category": "tech"}}
+    → {"metadata.author": "Alice", "metadata.category": "tech"}
+
+    Only flattens one level of dict nesting. Lists and other types
+    are kept as-is.
+    """
+    flat: dict[str, Any] = {}
+    for k, v in rec.items():
+        full_key = f"{prefix}{k}" if not prefix else f"{prefix}.{k}"
+        if (
+            isinstance(v, dict)
+            and v
+            and all(isinstance(vv, (str, int, float, bool, type(None))) for vv in v.values())
+            and all(
+                not isinstance(vv, str) or ("\n" not in vv and len(vv) < 200)
+                for vv in v.values()
+            )
+        ):
+            # Flatten scalar-valued dicts (no multi-line or very long strings)
+            for kk, vv in v.items():
+                flat[f"{full_key}.{kk}"] = vv
+        else:
+            flat[full_key] = v
+    return flat
+
+
+def _unflatten_record(flat: dict[str, Any]) -> dict[str, Any]:
+    """Reverse of _flatten_record — reconstruct nested dicts from dot-notation."""
+    result: dict[str, Any] = {}
+    for k, v in flat.items():
+        parts = k.split(".")
+        if len(parts) == 1:
+            result[k] = v
+        else:
+            # Nested: a.b.c → result["a"]["b"]["c"] = v
+            d = result
+            for part in parts[:-1]:
+                if part not in d:
+                    d[part] = {}
+                d = d[part]
+            d[parts[-1]] = v
+    return result
+
+
+def _flatten_records(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    """Flatten all records. Returns (flattened_records, was_flattened).
+
+    Only flattens if at least one record has a nested dict with scalar values.
+    Ensures all records have the same keys (fills missing with None).
+    """
+    has_nested = any(
+        isinstance(v, dict)
+        for rec in records[:10]  # sample first 10
+        for v in rec.values()
+    )
+    if not has_nested:
+        return records, False
+
+    flattened = [_flatten_record(rec) for rec in records]
+
+    # Unify keys — but only include keys present in >50% of records
+    # to avoid inflating the CSV with sparse optional fields
+    key_counts: dict[str, int] = {}
+    for rec in flattened:
+        for k in rec:
+            key_counts[k] = key_counts.get(k, 0) + 1
+
+    threshold = len(records) * 0.5
+    common_keys = [k for k, c in key_counts.items() if c >= threshold]
+
+    if not common_keys:
+        return records, False  # nothing useful after filtering
+
+    # Rebuild records with only common keys, fill missing with None
+    unified = []
+    for rec in flattened:
+        row = {}
+        for k in common_keys:
+            row[k] = rec.get(k)
+        unified.append(row)
+
+    return unified, True
+
+
 def _is_numeric_col(col: list[Any]) -> bool:
-    return all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in col)
+    non_null = [v for v in col if v is not None]
+    if not non_null:
+        return False
+    return all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in non_null)
 
 
 def _col_type(col: list[Any]) -> str:
-    """Reconstruction type for a residual (CSV) column."""
-    if all(isinstance(v, bool) for v in col):
-        return "bool"
-    if all(isinstance(v, int) and not isinstance(v, bool) for v in col):
-        return "int"
-    if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in col):
-        return "float"
-    if all(isinstance(v, str) for v in col):
-        return "str"
+    """Reconstruction type for a residual (CSV) column.
+
+    Handles nullable columns: [42, None, 38] → "int?" (not "json").
+    """
+    non_null = [v for v in col if v is not None]
+    has_null = len(non_null) < len(col)
+
+    if not non_null:
+        return "str"  # all None — treat as string
+
+    if all(isinstance(v, bool) for v in non_null):
+        return "bool?" if has_null else "bool"
+    if all(isinstance(v, int) and not isinstance(v, bool) for v in non_null):
+        return "int?" if has_null else "int"
+    if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in non_null):
+        return "float?" if has_null else "float"
+    if all(isinstance(v, str) for v in non_null):
+        return "str?" if has_null else "str"
     return "json"
 
 
 def _encode_cell(v: Any, t: str) -> str:
     if t == "json":
+        if v is None:
+            return ""
         return json.dumps(v, separators=(",", ":"))
     if v is None:
         return ""
@@ -92,11 +193,15 @@ def _decode_cell(s: str, t: str) -> Any:
         if s == "":
             return None
         return json.loads(s)
-    if t == "int":
+    # Nullable types: empty string → None
+    if t.endswith("?") and s == "":
+        return None
+    base = t.rstrip("?")
+    if base == "int":
         return int(s)
-    if t == "float":
+    if base == "float":
         return float(s)
-    if t == "bool":
+    if base == "bool":
         return s == "True"
     return s  # str: empty string stays empty string
 
@@ -108,7 +213,7 @@ def _decode_cell(s: str, t: str) -> Any:
 
 def _should_dict_encode(col: list[Any], col_type: str) -> bool:
     """Return True if dictionary encoding would save tokens."""
-    if col_type not in ("str", "json"):
+    if col_type.rstrip("?") not in ("str", "json"):
         return False
     unique = len(set(str(v) for v in col))
     # Dictionary pays: header line + one index per row
@@ -187,6 +292,24 @@ def columnar_fold(
     if not records or len(records) < cfg.min_rows:
         return None
 
+    # Try both flattened and unflattened, keep whichever is smaller
+    records_flat, was_flattened = _flatten_records(records)
+    result_flat = _columnar_fold_inner(raw_json, records_flat, cfg, flattened=was_flattened)
+    result_plain = _columnar_fold_inner(raw_json, records, cfg, flattened=False)
+
+    # Pick the better result
+    if result_flat and result_plain:
+        return result_flat if len(result_flat.folded_text) < len(result_plain.folded_text) else result_plain
+    return result_flat or result_plain
+
+
+def _columnar_fold_inner(
+    raw_json: str,
+    records: list[dict[str, Any]],
+    cfg: NumericFoldConfig,
+    flattened: bool,
+) -> ColumnarResult | None:
+    """Inner fold logic — called with both flattened and unflattened records."""
     keys = list(records[0].keys())
     cols = {k: [rec.get(k) for rec in records] for k in keys}
 
@@ -267,6 +390,7 @@ def columnar_fold(
         },
         "csv_types": csv_types,
         "dict_encoded": {k: order for k, (_, order) in dict_encoded.items()},
+        "flattened": flattened,
     }
 
     # Only return the fold if it actually reduces size
@@ -336,7 +460,25 @@ def reconstruct_columnar(folded_text: str, recipe: dict[str, Any]) -> list[dict[
             elif k in csv_vals:
                 rec[k] = csv_vals[k][i]
         out.append(rec)
+
+    # Unflatten dot-notation keys back to nested dicts if needed
+    if recipe.get("flattened"):
+        out = [_unflatten_record(rec) for rec in out]
+        # Strip None-valued keys that were added by key-unification
+        # (original records may not have had all keys)
+        out = [
+            {k: v for k, v in rec.items() if v is not None or k in _non_nullable_keys(recipe)}
+            for rec in out
+        ]
+
     return out
+
+
+def _non_nullable_keys(recipe: dict[str, Any]) -> set[str]:
+    """Keys that are genuinely nullable (not added by key-unification)."""
+    types = recipe.get("csv_types", {})
+    # Keys with non-nullable types always existed in the original
+    return {k for k, t in types.items() if not t.endswith("?")}
 
 
 # ---------------------------------------------------------------------------
