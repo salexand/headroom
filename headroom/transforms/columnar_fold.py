@@ -82,11 +82,15 @@ def _col_type(col: list[Any]) -> str:
 def _encode_cell(v: Any, t: str) -> str:
     if t == "json":
         return json.dumps(v, separators=(",", ":"))
-    return "" if v is None else str(v)
+    if v is None:
+        return ""
+    return str(v)
 
 
 def _decode_cell(s: str, t: str) -> Any:
     if t == "json":
+        if s == "":
+            return None
         return json.loads(s)
     if t == "int":
         return int(s)
@@ -94,7 +98,7 @@ def _decode_cell(s: str, t: str) -> Any:
         return float(s)
     if t == "bool":
         return s == "True"
-    return s
+    return s  # str: empty string stays empty string
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +268,10 @@ def columnar_fold(
         "csv_types": csv_types,
         "dict_encoded": {k: order for k, (_, order) in dict_encoded.items()},
     }
+
+    # Only return the fold if it actually reduces size
+    if len(folded_text) >= len(raw_json):
+        return None
 
     return ColumnarResult(
         folded_text=folded_text,
