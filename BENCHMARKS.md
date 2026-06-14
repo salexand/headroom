@@ -1,6 +1,6 @@
 # Headroom Fork -- Benchmark Results
 
-> 58% synthetic, 49% real-world, fully reversible, every workload reported.
+> 60% synthetic, 49% real-world, fully reversible, every workload reported.
 > The only tool that compresses structured data without losing the ability
 > to answer questions about it. One command to reproduce.
 
@@ -11,7 +11,7 @@
 ## Methodology
 
 - **Tokenizers**: `cl100k_base` (GPT-4) and `o200k_base` (GPT-4o)
-- **Datasets**: 13 synthetic benchmarks + 6 real-world tool output generators
+- **Datasets**: 14 synthetic benchmarks + 6 real-world tool output generators
 - **Adapters**: raw (baseline), gzip (byte-only), NumericFold, ColumnarFold, RTK, lean-ctx
 - Every workload run, including ones where the fork loses or ties
 - Token savings separated from byte savings
@@ -19,16 +19,16 @@
 
 ## Headline Tables
 
-### Synthetic benchmarks (cl100k_base, 13 datasets)
+### Synthetic benchmarks (cl100k_base, 14 datasets)
 
 | Tool | Tokens | Saved | Reversible |
 |------|-------:|------:|:----------:|
-| raw | 61,534 | -- | Yes |
-| gzip | 61,534 | -- | Yes |
-| numeric-fold | 38,123 | 38% | Yes |
-| **columnar-fold** | **25,687** | **58%** | **Yes** |
-| rtk | 662 | 99% | No |
-| lean-ctx | 61,534 | -- | No |
+| raw | 68,143 | -- | Yes |
+| gzip | 68,143 | -- | Yes |
+| numeric-fold | 42,245 | 38% | Yes |
+| **columnar-fold** | **27,313** | **60%** | **Yes** |
+| rtk | 788 | 99% | No |
+| lean-ctx | 68,143 | -- | No |
 
 ### Real-world tool outputs (cl100k_base, 6 datasets)
 
@@ -53,12 +53,12 @@ that achieves meaningful savings and remains fully reversible.
 
 ## Coverage Heatmap (% tokens saved by category)
 
-| Tool | adversarial | agent | numeric | numeric-heavy |
-|------|------------:|------:|--------:|--------------:|
-| numeric-fold | 19% | 3% | 58% | 35% |
-| **columnar-fold** | **34%** | **39%** | **68%** | **41%** |
-| rtk | 97% | 98% | 99% | 99% |
-| lean-ctx | -- | -- | -- | -- |
+| Tool | adversarial | agent | cross-column | numeric | numeric-heavy |
+|------|------------:|------:|-------------:|--------:|--------------:|
+| numeric-fold | 19% | 3% | 37% | 61% | 35% |
+| **columnar-fold** | **34%** | **48%** | **71%** | **73%** | **51%** |
+| rtk | 97% | 98% | 99% | 99% | 99% |
+| lean-ctx | -- | -- | -- | -- | -- |
 
 ColumnarFold covers every category. Its strength scales with data structure:
 - **numeric** (pure numeric columns): 67% -- closed-form codecs dominate
@@ -128,6 +128,32 @@ compressible to 2d values (d coefficients + d initial conditions).
 The codec detects the recurrence empirically via exact rational
 arithmetic — no domain knowledge required.
 
+### Cross-column references
+
+| Dataset | Raw | NumericFold | ColumnarFold | CF Saved |
+|---------|----:|------------:|-------------:|---------:|
+| cross_column (120 rows) | 6,605 | 4,181 | **1,920** | **71%** |
+
+The cross-column codec detects when a whole column is an exact affine
+function of another column (`B = m*A + c`) and stores it as a one-line
+`@linref` reference instead of N rows of data. Unlike the per-column codecs
+(AFFINE/DELTA/...), it works even when the base column is irregular — the
+relation is between *columns*, not row positions. Detected references:
+
+| Column | Relation | Without cross-column | With cross-column |
+|--------|----------|---------------------:|------------------:|
+| sec | `sec = ms/1000` (dual-unit timestamp) | DELTA (120 deltas) | `@linref:sec=ms\|m=0.001\|c=0` |
+| bytes | `bytes = kib*1024` (byte/KiB pair) | RAW column | `@linref:bytes=kib\|m=1024\|c=0` |
+| price | `price = price_tax - 7` (fixed fee) | RAW column | `@linref:price=price_tax\|m=1\|c=-7` |
+
+Detection uses exact rational arithmetic: two rows pin the slope, then the
+relation is verified for *every* row before the column is eliminated. Only
+null-free numeric columns participate, and references never chain, so
+reconstruction is always bit-exact (the column's int/float-ness is recorded
+so integer-valued floats like `123.0` decode back as floats, not ints).
+Common in real tool output: dual-unit timestamps, byte/KiB pairs,
+price-with-tax, duplicated id columns.
+
 ## NumericFold vs ColumnarFold
 
 ColumnarFold is a strict superset of NumericFold: same closed-form codecs
@@ -137,11 +163,12 @@ comes from key dedup -- in JSON, every row repeats `"id":`, `"level":`,
 
 | Metric | NumericFold | ColumnarFold | Improvement |
 |--------|----------:|-------------:|------------:|
-| Aggregate savings | 38% | **56%** | +18 points |
-| Datasets with >0% savings | 10/13 | **13/13** | +3 datasets |
+| Aggregate savings | 38% | **60%** | +22 points |
+| Datasets with >0% savings | 11/14 | **14/14** | +3 datasets |
 | Best single dataset | 79% | **89%** | +10 points |
-| Agent workload savings | 3% | **39%** | +36 points |
+| Agent workload savings | 3% | **48%** | +45 points |
 | Recurrence sequence savings | 0% | **89%** | +89 points |
+| Cross-column savings | 37% | **71%** | +34 points |
 
 ## Answer Fidelity
 

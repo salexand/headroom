@@ -105,9 +105,13 @@ class TestColumnarFold:
         raw = json.dumps(obj, separators=(",", ":"))
         result = columnar_fold(raw)
         assert result is not None
-        # t and count should be closed-form, label should be csv or dict
+        # t is closed-form. count == 2*t, so cross-column compression now
+        # represents it as a reference to t rather than its own AFFINE codec
+        # (both are valid + lossless; the reference is cheaper here).
         assert result.per_column["t"] in ("AFFINE", "CONST")
-        assert result.per_column["count"] in ("AFFINE", "CONST")
+        assert result.per_column["count"] in ("AFFINE", "CONST") or result.per_column[
+            "count"
+        ].startswith("linref:")
         assert result.per_column["label"].startswith(("csv:", "dict:"))
 
     def test_dict_encoding_low_cardinality(self) -> None:
@@ -215,3 +219,123 @@ class TestColumnarFold:
         assert cf_chars < nf_chars, (
             f"ColumnarFold ({cf_chars}) should beat NumericFold ({nf_chars})"
         )
+
+
+class TestCrossColumn:
+    """Cross-column compression: detect col B = m*A + c and store B as a
+    one-line reference instead of its own column data."""
+
+    def _roundtrip(self, records: list[dict]) -> ColumnarResult:
+        raw = json.dumps({"results": records}, separators=(",", ":"))
+        result = columnar_fold(raw)
+        assert result is not None
+        rebuilt = reconstruct_columnar(result.folded_text, result.recipe)
+        assert rebuilt == records
+        return result
+
+    def test_duplicate_column(self) -> None:
+        """An exact copy of another column (m=1, c=0) becomes a reference."""
+        import random
+        rng = random.Random(1)
+        recs = []
+        for i in range(40):
+            v = rng.randint(0, 10_000)
+            recs.append({"user_id": v, "owner_id": v, "name": f"u{i}"})
+        result = self._roundtrip(recs)
+        assert result.per_column["owner_id"] == "linref:user_id" or (
+            result.per_column["user_id"] == "linref:owner_id"
+        )
+        assert "@linref:" in result.folded_text
+
+    def test_scaled_column(self) -> None:
+        """B = A * k (offset 0) — e.g. bytes vs kibibytes."""
+        import random
+        rng = random.Random(2)
+        recs = [
+            {"kb": (b := rng.randint(1, 999)), "bytes": b * 1024, "host": f"h{i % 5}"}
+            for i in range(50)
+        ]
+        result = self._roundtrip(recs)
+        # one of the two must reference the other
+        assert "linref:" in result.per_column["bytes"] or "linref:" in result.per_column["kb"]
+
+    def test_affine_column(self) -> None:
+        """B = m*A + c with both m and c nonzero, irregular base."""
+        import random
+        rng = random.Random(3)
+        recs = []
+        for i in range(60):
+            base = rng.randint(-500, 500)
+            recs.append({"a": base, "b": 3 * base - 7, "tag": "x"})
+        result = self._roundtrip(recs)
+        assert "linref:" in result.per_column["a"] or "linref:" in result.per_column["b"]
+        # the reference encodes the slope and intercept
+        assert "@linref:" in result.folded_text
+
+    def test_float_affine_lossless(self) -> None:
+        """Float relation must round-trip bit-exactly."""
+        import random
+        rng = random.Random(4)
+        recs = []
+        for i in range(40):
+            p = round(rng.uniform(1, 1000), 2)
+            recs.append({"price": p, "with_fee": p + 2.5, "sku": f"s{i}"})
+        result = self._roundtrip(recs)  # _roundtrip asserts exact equality
+        assert "linref:" in result.per_column["price"] or "linref:" in result.per_column[
+            "with_fee"
+        ]
+
+    def test_no_false_reference(self) -> None:
+        """Independent columns must NOT be linked."""
+        import random
+        rng = random.Random(5)
+        recs = [
+            {"a": rng.randint(0, 1000), "b": rng.randint(0, 1000)} for i in range(40)
+        ]
+        raw = json.dumps({"results": recs}, separators=(",", ":"))
+        result = columnar_fold(raw)
+        if result is not None:
+            assert not any(
+                v.startswith("linref:") for v in result.per_column.values()
+            )
+            rebuilt = reconstruct_columnar(result.folded_text, result.recipe)
+            assert rebuilt == recs
+
+    def test_dual_unit_timestamps(self) -> None:
+        """ms = sec*1000 — both would otherwise be DELTA; one becomes a reference."""
+        import random
+        rng = random.Random(6)
+        sec = 1_718_200_000
+        recs = []
+        for i in range(50):
+            sec += rng.randint(1, 600)
+            recs.append({"sec": sec, "ms": sec * 1000, "level": "INFO"})
+        result = self._roundtrip(recs)
+        refs = [k for k, v in result.per_column.items() if v.startswith("linref:")]
+        assert refs, "expected ms/sec to be cross-linked"
+
+    def test_disabled_via_config(self) -> None:
+        """enable_cross_column=False suppresses references."""
+        recs = [{"a": i, "b": i, "c": i * 3} for i in range(30)]
+        raw = json.dumps({"results": recs}, separators=(",", ":"))
+        cfg = NumericFoldConfig(enable_cross_column=False)
+        result = columnar_fold(raw, cfg)
+        if result is not None:
+            assert not any(
+                v.startswith("linref:") for v in result.per_column.values()
+            )
+
+    def test_no_chain_references(self) -> None:
+        """A→B→C chains must not form; bases stay concrete and round-trip holds."""
+        import random
+        rng = random.Random(7)
+        recs = []
+        for i in range(50):
+            a = rng.randint(1, 1000)
+            recs.append({"a": a, "b": a * 2, "c": a * 4, "k": "v"})
+        result = self._roundtrip(recs)
+        linrefs = {k: v for k, v in result.per_column.items() if v.startswith("linref:")}
+        # whatever is a reference must point at a concrete (non-reference) column
+        for k, v in linrefs.items():
+            base = v.split(":", 1)[1]
+            assert base not in linrefs, f"{k} chains off reference {base}"

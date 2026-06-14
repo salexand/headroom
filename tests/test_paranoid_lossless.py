@@ -518,6 +518,56 @@ class TestRandomizedFuzzing:
                     f"{orig[k]!r} != {rec[k]!r}"
                 )
 
+    @pytest.mark.parametrize("seed", range(25))
+    def test_fuzz_cross_column(self, seed: int) -> None:
+        """Records with deliberately derived columns (B = m*A + c) plus noise.
+
+        Exercises the linref path hard: every derived column must round-trip
+        bit-exactly, with int/float type preserved, even when the base column
+        is itself irregular (RAW), closed-form (AFFINE/DELTA), or float."""
+        rng = random.Random(seed)
+        n = rng.randint(8, 150)
+
+        a = [rng.randint(-10_000, 10_000) for _ in range(n)]          # irregular int base
+        t = [1_718_200_000 + 7 * i for i in range(n)]                  # affine int base
+        p = [round(rng.uniform(1, 1000), 2) for _ in range(n)]        # float base
+
+        m_int = rng.choice([1, 2, -3, 1000])
+        c_int = rng.choice([0, 5, -7, 100])
+        m_flt = rng.choice([1, 2, 0.001])
+        c_flt = rng.choice([0, 2.5, -1.25])
+
+        records = []
+        for i in range(n):
+            records.append({
+                "a": a[i],
+                "a_lin": m_int * a[i] + c_int,        # derived from irregular int
+                "t": t[i],
+                "t_ms": t[i] * 1000,                  # derived from affine int
+                "p": p[i],
+                "p_fee": round(m_flt * p[i] + c_flt, 6),  # derived from float
+                "noise": rng.randint(0, 9),           # genuinely independent
+                "cat": rng.choice(["x", "y", "z"]),
+            })
+
+        raw = json.dumps({"results": records}, separators=(",", ":"))
+        result = columnar_fold(raw)
+        if result is None:
+            return
+
+        rebuilt = reconstruct_columnar(result.folded_text, result.recipe)
+        assert len(rebuilt) == n, f"Seed {seed}: row count {len(rebuilt)} != {n}"
+        for i, (orig, rec) in enumerate(zip(records, rebuilt)):
+            for k in orig:
+                assert k in rec, f"Seed {seed}, row {i}: key '{k}' missing"
+                assert type(orig[k]) == type(rec[k]), (
+                    f"Seed {seed}, row {i}, key '{k}': "
+                    f"type {type(orig[k])} != {type(rec[k])}"
+                )
+                assert orig[k] == rec[k], (
+                    f"Seed {seed}, row {i}, key '{k}': {orig[k]!r} != {rec[k]!r}"
+                )
+
     @pytest.mark.parametrize("seed", range(20))
     def test_fuzz_numeric_fold(self, seed: int) -> None:
         rng = random.Random(seed)

@@ -256,6 +256,42 @@ def _gen_recurrence(n: int = 100) -> tuple[dict[str, Any], list[dict[str, Any]]]
 
 
 # ---------------------------------------------------------------------------
+# Cross-column generators (derived columns)
+# ---------------------------------------------------------------------------
+
+
+def _gen_cross_column(n: int = 120) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Records where several columns are exact affine functions of others.
+
+    Common in real tool output: dual-unit timestamps, byte/KiB pairs,
+    price-with-tax, duplicated id columns. The ColumnarFold cross-column
+    codec stores each derived column as a one-line reference instead of N
+    rows of data. The base columns are deliberately irregular (random walk)
+    so per-column codecs can't shrink the derived columns on their own.
+    """
+    recs = []
+    blocks = 8
+    sec = 1718200000
+    for i in range(n):
+        blocks = max(1, blocks + _RNG.randint(-3, 6))
+        bytes_v = blocks * 1024  # block-aligned so the byte/KiB relation is exact
+        sec += _RNG.randint(1, 900)
+        price = round(_RNG.uniform(1, 999), 2)
+        recs.append({
+            "id": 10_000 + i,
+            "owner_id": 10_000 + i,            # exact duplicate of id
+            "sec": sec,
+            "ms": sec * 1000,                  # dual-unit timestamp
+            "bytes": bytes_v,
+            "kib": bytes_v / 1024,             # byte/KiB pair (float)
+            "price": price,
+            "price_tax": round(price + 7, 2),  # price + fixed fee
+            "status": _RNG.choice(["ok", "warn", "error"]),
+        })
+    return {"results": recs}, recs
+
+
+# ---------------------------------------------------------------------------
 # Adversarial generators (robustness)
 # ---------------------------------------------------------------------------
 
@@ -308,6 +344,8 @@ _GENERATORS: dict[str, tuple[str, Any]] = {
     "timeseries": ("numeric-heavy", _gen_timeseries),
     # Recurrence-pattern data (trace-unit sequences)
     "recurrence_sequences": ("recurrence", _gen_recurrence),
+    # Cross-column data (derived columns)
+    "cross_column": ("cross-column", _gen_cross_column),
     # Adversarial (robustness)
     "adversarial_floats": ("adversarial", _gen_adversarial),
     "near_progression": ("adversarial", _gen_near_progression),
@@ -320,6 +358,7 @@ SUITES: dict[str, list[str]] = {
     "agent": ["code_search", "github_issues", "codebase_exploration"],
     "numeric-heavy": ["api_response", "embeddings", "timeseries"],
     "recurrence": ["recurrence_sequences"],
+    "cross-column": ["cross_column"],
     "adversarial": ["adversarial_floats", "near_progression", "mixed_types"],
     "all": list(_GENERATORS.keys()),
 }

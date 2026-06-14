@@ -65,6 +65,7 @@ class NumericFoldConfig:
     max_poly_order: int = 3
     enable_recurrence: bool = True    # linear recurrence codec (Fibonacci-like sequences)
     max_recurrence_order: int = 4     # max order of linear recurrence to detect
+    enable_cross_column: bool = True  # detect col B = m*A + c, store B as a reference (ColumnarFold)
     hoist_raw: bool = False           # keep RAW columns inline (#4); True dedups keys
 
 

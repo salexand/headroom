@@ -39,6 +39,9 @@ from .base import Transform
 from .numeric_fold import (
     ColumnFold,
     NumericFoldConfig,
+    _est,
+    _num_str,
+    _to_fraction,
     fold_column,
     reconstruct_column,
 )
@@ -176,6 +179,50 @@ def _col_type(col: list[Any]) -> str:
     if all(isinstance(v, str) for v in non_null):
         return "str?" if has_null else "str"
     return "json"
+
+
+# ---------------------------------------------------------------------------
+# Cross-column compression — detect col B = m*A + c (exact affine relation)
+# ---------------------------------------------------------------------------
+
+
+def _numeric_fraction_col(col: list[Any]) -> list[Any] | None:
+    """Return the column as exact Fractions, or None if it isn't a clean
+    fully-numeric column (no nulls, no bools).
+
+    A LINREF base/target must reconstruct bit-exactly, so we refuse columns
+    with any None — a hole has no defined linear value.
+    """
+    if any(v is None or isinstance(v, bool) or not isinstance(v, (int, float)) for v in col):
+        return None
+    return [_to_fraction(v) for v in col]
+
+
+def _detect_linref(
+    target: list[Any],
+    bases: dict[str, list[Any]],
+) -> tuple[str, Any, Any] | None:
+    """Detect target == m*base + c exactly for some candidate base column.
+
+    `target` and each value in `bases` are lists of Fractions. Returns
+    (base_key, m, c) with m != 0, or None. Solving uses the first pair of
+    rows where the base differs (so m is well-defined) and then verifies the
+    relation holds for *every* row with exact rational arithmetic.
+    """
+    n = len(target)
+    for base_key, avals in bases.items():
+        # Need two rows with distinct base values to pin down the slope.
+        i0 = 0
+        j = next((k for k in range(1, n) if avals[k] != avals[i0]), None)
+        if j is None:
+            continue  # base is constant on these rows — slope undetermined
+        m = (target[j] - target[i0]) / (avals[j] - avals[i0])
+        if m == 0:
+            continue  # target constant w.r.t. base — CONST codec handles it better
+        c = target[i0] - m * avals[i0]
+        if all(target[k] == m * avals[k] + c for k in range(n)):
+            return base_key, m, c
+    return None
 
 
 def _encode_cell(v: Any, t: str) -> str:
@@ -364,6 +411,49 @@ def _columnar_fold_inner(
     if not closed and not csv_keys:
         return None
 
+    # Cross-column compression — eliminate a numeric column that is an exact
+    # affine function (m*A + c) of another column. The whole column leaves the
+    # CSV body; only a one-line @linref reference remains. Lossless: the
+    # relation is verified for every row with exact rational arithmetic, and
+    # only clean (null-free, non-bool) numeric columns ever participate.
+    linref: dict[str, tuple[str, Any, Any]] = {}
+    if cfg.enable_cross_column:
+        frac_cols = {
+            k: fc for k in keys if (fc := _numeric_fraction_col(cols[k])) is not None
+        }
+        used_as_base: set[str] = set()
+        # CSV (RAW) numeric columns first — eliminating one is always a win.
+        # Closed-form columns second — only if the one-line reference is cheaper
+        # than the column's own codec (e.g. ms = sec*1000 where both are DELTA).
+        target_order = [k for k in csv_keys if k in frac_cols] + [
+            k for k in closed if k in frac_cols
+        ]
+        for tgt in target_order:
+            if tgt in used_as_base or tgt in linref:
+                continue  # already a base / already referenced — keep it concrete
+            bases = {
+                bk: bv
+                for bk, bv in frac_cols.items()
+                if bk != tgt and bk not in linref  # never chain off a reference
+            }
+            ref = _detect_linref(frac_cols[tgt], bases)
+            if ref is None:
+                continue
+            base_key, m, c = ref
+            ref_line = f"@linref:{tgt}={base_key}|m={_num_str(m)}|c={_num_str(c)}"
+            if tgt in closed and _est(ref_line) >= _est(closed[tgt].payload_str):
+                continue  # the column's own codec is already cheaper
+            linref[tgt] = (base_key, m, c)
+            used_as_base.add(base_key)
+
+        # Pull the referenced columns out of the closed / CSV / type tables.
+        for k in linref:
+            closed.pop(k, None)
+            if k in csv_keys:
+                csv_keys.remove(k)
+            csv_types.pop(k, None)
+            per_column[k] = f"linref:{linref[k][0]}"
+
     # Dictionary-encode low-cardinality CSV columns
     dict_encoded: dict[str, tuple[dict[str, int], list[str]]] = {}
     for k in csv_keys:
@@ -411,12 +501,20 @@ def _columnar_fold_inner(
         elif k in prefix_encoded:
             dict_lines.append(f"@prefix:{k}={prefix_encoded[k]}")
 
+    # Cross-column reference lines (one per eliminated column)
+    linref_lines = [
+        f"@linref:{k}={base}|m={_num_str(m)}|c={_num_str(c)}"
+        for k, (base, m, c) in linref.items()
+    ]
+
     cols_str = ";".join(f"{k}={closed[k].payload_str}" for k in closed)
     header = f"n={len(records)}|cols:{cols_str}"
 
     parts = [header]
     if dict_lines:
         parts.extend(dict_lines)
+    if linref_lines:
+        parts.extend(linref_lines)
     if csv_text:
         parts.append(csv_text)
     folded_text = "\n".join(parts)
@@ -437,6 +535,18 @@ def _columnar_fold_inner(
         "csv_types": csv_types,
         "dict_encoded": {k: order for k, (_, order) in dict_encoded.items()},
         "prefix_encoded": prefix_encoded,
+        "linref": {
+            # `type` preserves the column's int/float-ness: a float column may
+            # hold integer-valued floats (123.0) whose reconstructed Fraction
+            # has denominator 1 — without this it would decode back to int.
+            k: {
+                "base": base,
+                "m": _num_str(m),
+                "c": _num_str(c),
+                "type": _col_type(cols[k]).rstrip("?"),
+            }
+            for k, (base, m, c) in linref.items()
+        },
         "flattened": flattened,
     }
 
@@ -464,6 +574,7 @@ def reconstruct_columnar(folded_text: str, recipe: dict[str, Any]) -> list[dict[
     schema = recipe["schema"]
     dict_encoded = recipe.get("dict_encoded", {})
     prefix_encoded = recipe.get("prefix_encoded", {})
+    linref = recipe.get("linref", {})
 
     # Closed-form columns
     closed_vals: dict[str, list[Any]] = {}
@@ -478,8 +589,8 @@ def reconstruct_columnar(folded_text: str, recipe: dict[str, Any]) -> list[dict[
     csv_vals: dict[str, list[Any]] = {}
     lines = folded_text.split("\n")
     csv_start = 1  # skip header line
-    while csv_start < len(lines) and (
-        lines[csv_start].startswith("@dict:") or lines[csv_start].startswith("@prefix:")
+    while csv_start < len(lines) and lines[csv_start].startswith(
+        ("@dict:", "@prefix:", "@linref:")
     ):
         csv_start += 1
 
@@ -509,12 +620,35 @@ def reconstruct_columnar(folded_text: str, recipe: dict[str, Any]) -> list[dict[
                 else:
                     csv_vals[k] = [_decode_cell(r[ci], types[k]) for r in csv_rows]
 
+    # Cross-column references: rebuild each eliminated column from its base.
+    # Bases are always concrete (closed-form or CSV) — references never chain.
+    linref_vals: dict[str, list[Any]] = {}
+    for k, meta in linref.items():
+        base_col = closed_vals.get(meta["base"])
+        if base_col is None:
+            base_col = csv_vals[meta["base"]]
+        m = _to_fraction(meta["m"])
+        c = _to_fraction(meta["c"])
+        out_type = meta.get("type")  # "int" / "float"; None → infer (legacy)
+        col = []
+        for v in base_col:
+            val = m * _to_fraction(v) + c
+            if out_type == "int":
+                col.append(int(val))
+            elif out_type == "float":
+                col.append(float(val))
+            else:
+                col.append(int(val) if val.denominator == 1 else float(val))
+        linref_vals[k] = col
+
     out = []
     for i in range(n):
         rec = {}
         for k in schema:
             if k in closed_vals:
                 rec[k] = closed_vals[k][i]
+            elif k in linref_vals:
+                rec[k] = linref_vals[k][i]
             elif k in csv_vals:
                 rec[k] = csv_vals[k][i]
         out.append(rec)

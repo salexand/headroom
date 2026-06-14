@@ -237,16 +237,19 @@ def _reference_from_columnar(context: str, qa: QA) -> str:
         # non-numeric lookups, and read closed-form columns from the header.
 
         lines = context.split("\n")
-        # Skip header and @dict: lines to find CSV
+        # Skip header and all @-prefixed metadata lines (@dict:/@prefix:/@linref:)
+        # to find the CSV body. Only @dict: needs parsing here; the others affect
+        # specific columns this best-effort reader doesn't reconstruct.
         csv_start = 1
         dict_maps: dict[str, list[str]] = {}
-        while csv_start < len(lines) and lines[csv_start].startswith("@dict:"):
-            # Parse @dict:key=val1,val2,val3
-            dict_line = lines[csv_start][6:]  # strip "@dict:"
-            eq_pos = dict_line.index("=")
-            dk = dict_line[:eq_pos]
-            dv = dict_line[eq_pos + 1:].split(",")
-            dict_maps[dk] = dv
+        while csv_start < len(lines) and lines[csv_start].startswith("@"):
+            if lines[csv_start].startswith("@dict:"):
+                # Parse @dict:key=val1,val2,val3
+                dict_line = lines[csv_start][6:]  # strip "@dict:"
+                eq_pos = dict_line.index("=")
+                dk = dict_line[:eq_pos]
+                dv = dict_line[eq_pos + 1:].split(",")
+                dict_maps[dk] = dv
             csv_start += 1
 
         # Parse CSV portion

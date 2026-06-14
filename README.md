@@ -123,9 +123,9 @@ Granular extras: `[proxy]`, `[mcp]`, `[ml]`, `[code]`, `[memory]`, `[relevance]`
 
 Reproduce: `python -m headroom.evals suite --tier 1` · [Full benchmarks & methodology](https://headroom-docs.vercel.app/docs/benchmarks)
 
-**This fork's added value -- 58% synthetic, 49% real-world, fully reversible:**
+**This fork's added value -- 60% synthetic, 49% real-world, fully reversible:**
 
-Synthetic benchmarks (13 datasets, controlled data):
+Synthetic benchmarks (14 datasets, controlled data):
 
 | Dataset | Before | After | Saved | Reversible |
 |---------|-------:|------:|------:|:----------:|
@@ -133,9 +133,10 @@ Synthetic benchmarks (13 datasets, controlled data):
 | Geo search (150 rows) | 4,354 | 666 | **85%** | Yes |
 | Timeseries (250 rows) | 7,504 | 1,575 | **79%** | Yes |
 | Metrics timeseries (300 rows) | 6,573 | 1,859 | **72%** | Yes |
+| Cross-column (120 rows, derived cols) | 6,605 | 1,920 | **71%** | Yes |
 | SRE logs (200 rows) | 5,604 | 2,069 | **63%** | Yes |
 | API response (200 rows) | 11,854 | 5,278 | **55%** | Yes |
-| **All 13 datasets** | **61,534** | **25,687** | **58%** | **Yes** |
+| **All 14 datasets** | **68,143** | **27,313** | **60%** | **Yes** |
 
 Real-world tool outputs (6 realistic generators with nested dicts, optional fields, UUIDs):
 
@@ -351,17 +352,18 @@ This fork extends upstream Headroom with **lossless, structure-aware compression
 | `RATIONAL` | hidden fractions (continued-fraction convergents) | `3.14159...` -> `355/113` | the fraction |
 | `RECURRENCE` | linear recurrence (Fibonacci-like, exponential, geometric) | `1,3,11,41,153,...` | coefficients + initial values |
 
-**ColumnarFold** builds on NumericFold by transposing the leftover non-numeric columns into a single CSV block where each key appears once in the header instead of once per row:
+**ColumnarFold** builds on NumericFold by transposing the leftover non-numeric columns into a single CSV block where each key appears once in the header instead of once per row. It also applies **cross-column references**: when a whole column is an exact affine function of another (`B = m*A + c` — dual-unit timestamps, byte/KiB pairs, price-with-tax, duplicated ids), the column is replaced by a one-line `@linref` reference instead of N rows of data:
 
 ```
 n=100|cols:id=AFFINE(a0=0,d=1,n=100);ts=AFFINE(a0=1718200000,d=7,n=100)
+@linref:bytes=kib|m=1024|c=0
 _i,level,latency_ms,msg
 0,INFO,56.8,request handled
 1,WARN,31.7,cache miss
 ...
 ```
 
-Both are **lossless** (every value reconstructs bit-for-bit) and covered by 38 unit + round-trip tests.
+Both are **lossless** (every value reconstructs bit-for-bit) and covered by 50+ unit, round-trip, and randomized-fuzz tests.
 
 ---
 
@@ -369,10 +371,12 @@ Both are **lossless** (every value reconstructs bit-for-bit) and covered by 38 u
 
 Single-command, reproducible benchmark: `python -m headroom.bench run --suite all --competitors --fidelity`
 
-**12 datasets** across 4 categories:
+**14 datasets** across 6 categories:
 - **Numeric**: SRE logs, geo search, metrics timeseries
 - **Agent**: code search, GitHub issues, codebase exploration
 - **Numeric-heavy**: API responses, embeddings, timeseries
+- **Recurrence**: recurrence sequences
+- **Cross-column**: derived columns (`B = m*A + c`)
 - **Adversarial**: random floats, near-progressions, mixed types
 
 **7 adapters**: raw (baseline), gzip (byte-only reference), NumericFold, ColumnarFold, RTK, lean-ctx, headroom-upstream
@@ -381,20 +385,20 @@ Single-command, reproducible benchmark: `python -m headroom.bench run --suite al
 
 | Tool | Tokens | Saved | Reversible |
 |------|-------:|------:|:----------:|
-| raw | 61,534 | -- | Yes |
-| numeric-fold | 38,123 | 38% | Yes |
-| **columnar-fold** | **25,687** | **58%** | **Yes** |
-| rtk | 662 | 99% | No |
-| lean-ctx | 61,534 | -- | No |
+| raw | 68,143 | -- | Yes |
+| numeric-fold | 42,245 | 38% | Yes |
+| **columnar-fold** | **27,313** | **60%** | **Yes** |
+| rtk | 788 | 99% | No |
+| lean-ctx | 68,143 | -- | No |
 
-ColumnarFold saves **58% on synthetic data** and **49% on real-world tool outputs** (with nested dicts, optional fields, UUIDs). Includes RECURRENCE codec, dictionary encoding, prefix dedup, and nested-dict flattening. RTK achieves 99% but is lossy (0% answer fidelity). ColumnarFold is the only tool that compresses meaningfully **and** stays fully reversible.
+ColumnarFold saves **60% on synthetic data** and **49% on real-world tool outputs** (with nested dicts, optional fields, UUIDs). Includes RECURRENCE codec, cross-column references, dictionary encoding, prefix dedup, and nested-dict flattening. RTK achieves 99% but is lossy (0% answer fidelity). ColumnarFold is the only tool that compresses meaningfully **and** stays fully reversible.
 
 **Coverage heatmap** (% tokens saved by category):
 
-| Tool | adversarial | agent | numeric | numeric-heavy |
-|------|------------:|------:|--------:|--------------:|
-| numeric-fold | 19% | 3% | 58% | 35% |
-| **columnar-fold** | **34%** | **39%** | **68%** | **41%** |
+| Tool | adversarial | agent | cross-column | numeric | numeric-heavy |
+|------|------------:|------:|-------------:|--------:|--------------:|
+| numeric-fold | 19% | 3% | 37% | 61% | 35% |
+| **columnar-fold** | **34%** | **48%** | **71%** | **73%** | **51%** |
 | rtk | 97% | 98% | 99% | 99% |
 
 The suite also includes:
@@ -443,8 +447,8 @@ Three fields power the fork's compression:
 | Module | Tests | What's covered |
 |--------|------:|----------------|
 | NumericFold | 30 | Codec selection, lossless round-trips, edge cases |
-| ColumnarFold | 8 | Fold, roundtrip, type preservation, beats-NumericFold |
-| headroom-bench | 53 | Loader, adapters, scorer, reporter, fidelity, CLI |
+| ColumnarFold | 16 | Fold, roundtrip, type preservation, cross-column references, beats-NumericFold |
+| headroom-bench | 55 | Loader, adapters, scorer, reporter, fidelity, CLI |
 | MDL Scorer | 10 | Selection, inflation rejection, model cost, errors |
 | rANS Codec | 15 | Round-trips, compression ratios, all byte values |
 | Ramanujan LSH | 10 | ANN search, dedup, recall at scale |

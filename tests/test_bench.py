@@ -105,6 +105,23 @@ class TestLoader:
         assert ds.category == "numeric-heavy"
         assert len(ds.records) == 250
 
+    # -- cross-column --
+
+    def test_load_builtin_cross_column(self) -> None:
+        ds = load_builtin("cross_column")
+        assert ds.category == "cross-column"
+        assert len(ds.records) == 120
+        # Derived columns are exact functions of their base columns
+        r = ds.records[0]
+        assert r["owner_id"] == r["id"]
+        assert r["ms"] == r["sec"] * 1000
+        assert r["kib"] == r["bytes"] / 1024
+
+    def test_cross_column_suite(self) -> None:
+        datasets = load_suite("cross-column")
+        names = {d.name for d in datasets}
+        assert names == {"cross_column"}
+
     # -- adversarial (expanded) --
 
     def test_load_builtin_near_progression(self) -> None:
