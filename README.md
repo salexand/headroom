@@ -123,26 +123,33 @@ Granular extras: `[proxy]`, `[mcp]`, `[ml]`, `[code]`, `[memory]`, `[relevance]`
 
 Reproduce: `python -m headroom.evals suite --tier 1` · [Full benchmarks & methodology](https://headroom-docs.vercel.app/docs/benchmarks)
 
-**This fork's added value (ColumnarFold + dictionary + recurrence codecs) -- 56% aggregate savings, fully reversible:**
+**This fork's added value -- 58% synthetic, 49% real-world, fully reversible:**
+
+Synthetic benchmarks (13 datasets, controlled data):
 
 | Dataset | Before | After | Saved | Reversible |
 |---------|-------:|------:|------:|:----------:|
 | Recurrence sequences (100 rows) | 4,327 | 496 | **89%** | Yes |
+| Geo search (150 rows) | 4,354 | 666 | **85%** | Yes |
 | Timeseries (250 rows) | 7,504 | 1,575 | **79%** | Yes |
-| Geo search (150 rows) | 4,354 | 960 | **78%** | Yes |
 | Metrics timeseries (300 rows) | 6,573 | 1,859 | **72%** | Yes |
 | SRE logs (200 rows) | 5,604 | 2,069 | **63%** | Yes |
-| API response (200 rows) | 11,849 | 5,278 | **55%** | Yes |
-| Code search (80 results) | 2,617 | 1,341 | **49%** | Yes |
-| Near progression (80 rows) | 1,126 | 666 | **41%** | Yes |
-| Mixed types (60 rows) | 1,128 | 689 | **39%** | Yes |
-| GitHub issues (100 issues) | 5,048 | 3,112 | **38%** | Yes |
-| Codebase exploration (120 files) | 3,747 | 2,574 | **31%** | Yes |
-| Adversarial floats (60 rows) | 1,494 | 1,154 | **23%** | Yes |
-| Embeddings (100 rows) | 6,225 | 5,350 | **14%** | Yes |
-| **All 13 datasets** | **61,596** | **27,123** | **56%** | **Yes** |
+| API response (200 rows) | 11,854 | 5,278 | **55%** | Yes |
+| **All 13 datasets** | **61,534** | **25,687** | **58%** | **Yes** |
 
-Competitors: RTK achieves 99% but is lossy (0% answer fidelity -- truncated arrays can't answer per-record questions). ColumnarFold is the only tool that compresses meaningfully **and** stays fully reversible.
+Real-world tool outputs (6 realistic generators with nested dicts, optional fields, UUIDs):
+
+| Dataset | Before | After | Saved | Reversible |
+|---------|-------:|------:|------:|:----------:|
+| API responses (200, nested attrs/links/meta) | 15,250 | 6,501 | **57%** | Yes |
+| DB metrics (300 rows) | 13,599 | 6,464 | **52%** | Yes |
+| DB users (200, mixed nulls) | 9,802 | 5,012 | **49%** | Yes |
+| Search results (200, nested metadata) | 14,726 | 7,618 | **48%** | Yes |
+| Log entries (500, nested exceptions) | 32,371 | 17,513 | **46%** | Yes |
+| DB transactions (200 rows) | 10,317 | 5,990 | **42%** | Yes |
+| **All 6 real-world datasets** | **96,065** | **49,098** | **49%** | **Yes** |
+
+Competitors: RTK achieves 99% but is lossy (0% answer fidelity). ColumnarFold is the only tool that compresses meaningfully **and** stays fully reversible.
 
 Reproduce: `python -m headroom.bench run --suite all --competitors --fidelity` · [Full benchmark report](BENCHMARKS.md)
 
@@ -374,13 +381,13 @@ Single-command, reproducible benchmark: `python -m headroom.bench run --suite al
 
 | Tool | Tokens | Saved | Reversible |
 |------|-------:|------:|:----------:|
-| raw | 61,596 | -- | Yes |
+| raw | 61,534 | -- | Yes |
 | numeric-fold | 38,123 | 38% | Yes |
-| **columnar-fold** | **27,123** | **56%** | **Yes** |
+| **columnar-fold** | **25,687** | **58%** | **Yes** |
 | rtk | 662 | 99% | No |
-| lean-ctx | 61,596 | -- | No |
+| lean-ctx | 61,534 | -- | No |
 
-ColumnarFold saves **56% of all tokens** across every workload type, including a RECURRENCE codec for integer sequences following linear recurrences (89% savings on recurrence-patterned data). RTK achieves 99% but is lossy (0% answer fidelity). ColumnarFold is the only tool that compresses meaningfully **and** stays fully reversible.
+ColumnarFold saves **58% on synthetic data** and **49% on real-world tool outputs** (with nested dicts, optional fields, UUIDs). Includes RECURRENCE codec, dictionary encoding, prefix dedup, and nested-dict flattening. RTK achieves 99% but is lossy (0% answer fidelity). ColumnarFold is the only tool that compresses meaningfully **and** stays fully reversible.
 
 **Coverage heatmap** (% tokens saved by category):
 
