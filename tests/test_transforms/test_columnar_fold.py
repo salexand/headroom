@@ -57,9 +57,15 @@ class TestColumnarFold:
     def test_returns_none_for_non_json(self) -> None:
         assert columnar_fold("not json") is None
 
-    def test_returns_none_for_small_dataset(self) -> None:
-        obj = {"results": [{"id": i} for i in range(3)]}
+    def test_returns_none_for_tiny_dataset(self) -> None:
+        obj = {"results": [{"id": i} for i in range(2)]}
         assert columnar_fold(json.dumps(obj)) is None
+
+    def test_small_dataset_folds(self) -> None:
+        """3-row datasets now fold (threshold lowered from 8 to 3)."""
+        obj = {"results": [{"id": i, "val": i * 10} for i in range(3)]}
+        result = columnar_fold(json.dumps(obj, separators=(",", ":")))
+        assert result is not None
 
     def test_preserves_column_types(self) -> None:
         obj = {

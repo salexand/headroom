@@ -57,8 +57,8 @@ class NumericFoldConfig:
     """Configuration for NumericFold. Mirrors the SmartCrusherConfig style."""
 
     enabled: bool = True
-    min_tokens_to_fold: int = 80      # skip tiny tool outputs
-    min_rows: int = 8                 # need enough rows for a codec to pay off
+    min_tokens_to_fold: int = 30      # even 3-row arrays save 18%+ with ColumnarFold
+    min_rows: int = 3                 # 3 rows is enough for CSV key dedup to pay off
     rel_tol: float = 1e-9             # RATIONAL within-tolerance bound
     enable_rational: bool = True
     enable_poly: bool = False         # GATED — only legible on strong tiers (#5)
