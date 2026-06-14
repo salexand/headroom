@@ -1,8 +1,8 @@
 # Headroom Fork -- Benchmark Results
 
-> 56% fewer tokens, fully reversible, every workload reported. The only
-> tool that compresses structured data without losing the ability to
-> answer questions about it. One command to reproduce.
+> 58% synthetic, 49% real-world, fully reversible, every workload reported.
+> The only tool that compresses structured data without losing the ability
+> to answer questions about it. One command to reproduce.
 
 **Reproduce:** `python -m headroom.bench run --suite all --competitors --fidelity`
 
@@ -11,29 +11,45 @@
 ## Methodology
 
 - **Tokenizers**: `cl100k_base` (GPT-4) and `o200k_base` (GPT-4o)
-- **Datasets**: 12 built-in workloads across 4 categories
+- **Datasets**: 13 synthetic benchmarks + 6 real-world tool output generators
 - **Adapters**: raw (baseline), gzip (byte-only), NumericFold, ColumnarFold, RTK, lean-ctx
 - Every workload run, including ones where the fork loses or ties
 - Token savings separated from byte savings
 - Reversibility measured, not assumed
 
-## Headline Table (cl100k_base, all 12 datasets aggregated)
+## Headline Tables
+
+### Synthetic benchmarks (cl100k_base, 13 datasets)
 
 | Tool | Tokens | Saved | Reversible |
 |------|-------:|------:|:----------:|
-| raw | 61,596 | -- | Yes |
-| gzip | 61,596 | -- | Yes |
+| raw | 61,534 | -- | Yes |
+| gzip | 61,534 | -- | Yes |
 | numeric-fold | 38,123 | 38% | Yes |
-| **columnar-fold** | **27,123** | **56%** | **Yes** |
+| **columnar-fold** | **25,687** | **58%** | **Yes** |
 | rtk | 662 | 99% | No |
-| lean-ctx | 61,596 | -- | No |
+| lean-ctx | 61,534 | -- | No |
 
-**ColumnarFold saves 56% of tokens** across all workloads, with dictionary
-encoding for low-cardinality strings and a RECURRENCE codec for linear-
-recurrence integer sequences (Fibonacci-like, exponential, geometric). RTK achieves 99%
-but is lossy -- it truncates arrays to one example + count and scores **0%
-answer fidelity**. ColumnarFold is the only tool that achieves meaningful
-savings and remains fully reversible.
+### Real-world tool outputs (cl100k_base, 6 datasets)
+
+| Dataset | Raw | ColumnarFold | Saved |
+|---------|----:|------------:|------:|
+| API responses (200, nested) | 15,250 | 6,501 | **57%** |
+| DB metrics (300 rows) | 13,599 | 6,464 | **52%** |
+| DB users (200, mixed nulls) | 9,802 | 5,012 | **49%** |
+| Search results (200, nested) | 14,726 | 7,618 | **48%** |
+| Log entries (500, nested) | 32,371 | 17,513 | **46%** |
+| DB transactions (200 rows) | 10,317 | 5,990 | **42%** |
+| **AGGREGATE** | **96,065** | **49,098** | **49%** |
+
+Real-world data includes nested dicts (API attributes, search metadata,
+log exceptions), optional fields, UUIDs, timestamps, and mixed-null
+columns. ColumnarFold handles all of these via nested-dict flattening,
+nullable types, dictionary encoding, and prefix dedup.
+
+RTK achieves 99% but is lossy -- it truncates arrays to one example +
+count and scores **0% answer fidelity**. ColumnarFold is the only tool
+that achieves meaningful savings and remains fully reversible.
 
 ## Coverage Heatmap (% tokens saved by category)
 
@@ -152,7 +168,7 @@ questions about the data.
 
 | Tool | Savings | Reversible | Fidelity | Latency | Notes |
 |------|--------:|:----------:|---------:|--------:|-------|
-| **ColumnarFold** | **56%** | **Yes** | **100%** | 1-3 ms/KB | Structure-aware, exact, dict + recurrence |
+| **ColumnarFold** | **58% syn / 49% real** | **Yes** | **100%** | 1-3 ms/KB | Codecs + CSV + dict + prefix + flatten |
 | NumericFold | 33% | Yes | lossless* | 1-3 ms/KB | Numeric columns only |
 | RTK | 99% | No | 0% | 2-10 ms/KB | Lossy truncation |
 | lean-ctx | 0% | No | 100% | 0.2 ms/KB | Verbatim (no compression) |
